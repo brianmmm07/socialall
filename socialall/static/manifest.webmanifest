@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "SocialAll",
+  "short_name": "SocialAll",
+  "description": "Posts about your topics from X, Instagram, Xiaohongshu, TikTok and LinkedIn in one feed.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#faf5ec",
+  "theme_color": "#faf5ec",
+  "icons": [
+    {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
