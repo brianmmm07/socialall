@@ -3,6 +3,8 @@
 const PLATFORMS = { x: "X", instagram: "Instagram", xiaohongshu: "Xiaohongshu", tiktok: "TikTok", linkedin: "LinkedIn" };
 const PAGE = 60;
 const $ = (id) => document.getElementById(id);
+const stored = (k, fallback) => { try { return localStorage.getItem(k) ?? fallback; } catch { return fallback; } };
+const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 const state = {
   view: "home",        // home | search | topic | favorites
@@ -12,6 +14,9 @@ const state = {
   favs: new Map(),     // key -> favourite record (cache status etc.)
   hiddenPlatforms: new Set(),
   kind: "all",
+  sort: stored("sort", "recent") === "top" ? "top" : "recent",  // topic view only
+  newKeys: new Set(),
+  findQuery: "",       // favourites view only, lower-cased  // posts that arrived in the last refresh of this topic
   offset: 0,
   hasMore: false,
   viewerIndex: -1,
@@ -94,8 +99,10 @@ function tileHtml(p, i) {
     </div>`;
   }
   const meta = `<div class="meta">${hasMedia ? "" : `<span class="dot" data-p="${esc(p.platform)}"></span>`}
-      <span class="who">${esc(p.author || label)}</span><span class="when">${esc(ago(p.created_at))}</span></div>`;
-  return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}">
+      <span class="who">${esc(p.author || label)}</span>${state.newKeys.has(key) ? `<span class="new">New</span>` : ""}<span class="when">${esc(ago(p.created_at))}</span></div>`;
+  const find = state.view === "favorites" ? ` data-s="${esc(`${p.text} ${p.author || ""} ${label}`.toLowerCase())}"` : "";
+  const also = p.also_on?.length ? ` data-also="${esc(p.also_on.map((a) => a.platform).join(" "))}"` : "";
+  return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}"${find}${also}>
     <button class="fav" type="button" data-act="fav" aria-pressed="${!!fav}" aria-label="${fav ? "Remove from favourites" : "Add to favourites"}">${icon("star")}</button>
     <button class="tile-open" type="button" data-act="open" aria-label="Open ${esc(label)} post">
       ${frame}
@@ -138,19 +145,27 @@ function skeleton(n = 8) {
 /* Filtering only toggles visibility, so it never rebuilds the feed. */
 function applyFilters() {
   let shown = 0;
-  for (const el of $("feed").querySelectorAll(".tile")) {
-    const ok = !state.hiddenPlatforms.has(el.dataset.p) && (state.kind === "all" || el.dataset.kind === state.kind);
+  const q = state.view === "favorites" ? state.findQuery : "";
+  const tiles = $("feed").querySelectorAll(".tile");
+  for (const el of tiles) {
+    // A collapsed cross-post shows while any of its platforms is shown.
+    const platforms = el.dataset.also ? [el.dataset.p, ...el.dataset.also.split(" ")] : [el.dataset.p];
+    const ok = platforms.some((k) => !state.hiddenPlatforms.has(k)) && (state.kind === "all" || el.dataset.kind === state.kind)
+      && (!q || el.dataset.s?.includes(q));
     el.hidden = !ok;
     if (ok) shown++;
   }
+  $("nomatch").hidden = !(q && tiles.length && !shown);
   return shown;
 }
 
 function renderChips() {
   const counts = {};
-  for (const p of state.posts) counts[p.platform] = (counts[p.platform] || 0) + 1;
+  for (const p of state.posts) for (const k of [p.platform, ...(p.also_on || []).map((a) => a.platform)]) counts[k] = (counts[k] || 0) + 1;
   const present = Object.keys(PLATFORMS).filter((k) => counts[k]);
   $("filters").hidden = !state.posts.length;
+  $("sort").hidden = state.view !== "topic";
+  $("find").hidden = state.view !== "favorites";
   $("chips").innerHTML = present.map((k) =>
     `<button class="chip" type="button" data-p="${k}" aria-pressed="${!state.hiddenPlatforms.has(k)}"><span class="dot"></span>${PLATFORMS[k]}<span class="n">${counts[k]}</span></button>`).join("");
 }
@@ -180,12 +195,43 @@ function markNav() {
 }
 
 /* ---------- views ---------- */
-async function runSearch(q, fresh = false) {
+/* ---------- deep links: #q=term, #topic=id, #favorites ---------- */
+function parseHash(h) {
+  const m = /^#(q|topic)=(.+)$/.exec(h);
+  if (h === "#favorites") return { view: "favorites" };
+  if (m?.[1] === "topic" && /^\d+$/.test(m[2])) return { view: "topic", id: +m[2] };
+  if (m?.[1] === "q") { try { const q = decodeURIComponent(m[2]).trim(); if (q) return { view: "search", q }; } catch {} }
+  return { view: "home" };
+}
+
+/* nav: "push" adds a history entry, "replace" swaps the current one, false leaves the URL. */
+function setHash(h, nav) {
+  if (!nav || location.hash === h || (!h && !location.hash)) return;
+  const url = h || location.pathname + location.search;
+  nav === "replace" ? history.replaceState(null, "", url) : history.pushState(null, "", url);
+}
+
+async function route() {
+  const r = parseHash(location.hash);
+  if (r.view === "search") return runSearch(r.q, false, false);
+  if (r.view === "favorites") return openFavorites(false);
+  if (r.view === "topic") {
+    const topics = state.topicList || (await loadTopics());
+    const t = topics.find((x) => x.id === r.id);
+    if (t) return openTopic(t, false);
+    toast("That topic no longer exists");
+    return goHome("replace");
+  }
+  goHome(false);
+}
+
+async function runSearch(q, fresh = false, nav = "push") {
   q = q.trim();
   if (!q) return;
+  setHash(`#q=${encodeURIComponent(q)}`, nav);
   state.searchAbort?.abort();
   const ctrl = (state.searchAbort = new AbortController());
-  Object.assign(state, { view: "search", query: q, topic: null, offset: 0, hasMore: false });
+  Object.assign(state, { view: "search", query: q, topic: null, offset: 0, hasMore: false, newKeys: new Set() });
   $("q").value = q;
   $("save").disabled = false;
   markNav();
@@ -211,16 +257,24 @@ function summary(posts) {
   return `${posts.length} post${posts.length === 1 ? "" : "s"} from ${n} platform${n === 1 ? "" : "s"}`;
 }
 
-async function openTopic(t) {
+async function openTopic(t, nav = "push") {
   state.searchAbort?.abort();
-  Object.assign(state, { view: "topic", topic: t, query: t.name, offset: 0 });
+  setHash(`#topic=${t.id}`, nav);
+  Object.assign(state, { view: "topic", topic: t, query: t.name, offset: 0, newKeys: new Set() });
   $("q").value = t.name;
   $("save").disabled = true;
   markNav();
   setHeader(t.name, "Loading saved posts…", true);
   showErrors();
   skeleton();
-  const posts = await api(`/api/topics/${t.id}/posts?limit=${PAGE}`);
+  let posts;
+  try {
+    posts = await api(postsUrl(t.id));
+  } catch (e) {
+    toast(`Couldn't open topic: ${e.message}`);
+    return goHome("replace");
+  }
+  if (state.view !== "topic" || state.topic.id !== t.id) return;
   if (!posts.length) return refreshTopic();
   state.posts = posts;
   state.hasMore = posts.length === PAGE;
@@ -228,33 +282,72 @@ async function openTopic(t) {
   renderFeed();
 }
 
+const postsUrl = (id, offset = 0) => `/api/topics/${id}/posts?limit=${PAGE}&offset=${offset}&sort=${state.sort}`;
+
+async function setSort(sort) {
+  if (sort === state.sort) return;
+  state.sort = sort;
+  store("sort", sort);
+  for (const x of $("sort").children) x.setAttribute("aria-pressed", String(x.dataset.sort === sort));
+  if (state.view !== "topic") return;
+  const t = state.topic;
+  const posts = await api(postsUrl(t.id));
+  if (state.view !== "topic" || state.topic.id !== t.id || state.sort !== sort) return;
+  state.posts = posts;
+  state.hasMore = posts.length === PAGE;
+  renderFeed();
+}
+
 function topicSub(t) {
   return `${t.post_count ?? state.posts.length} saved posts${t.refreshed_at ? ` · updated ${ago(t.refreshed_at)}` : ""}`;
 }
 
+let loadingMore = false;
 async function loadMore() {
-  if (state.view !== "topic") return;
+  if (state.view !== "topic" || !state.hasMore || loadingMore) return false;
   const btn = $("more-btn");
-  btn.disabled = true;
-  const next = await api(`/api/topics/${state.topic.id}/posts?limit=${PAGE}&offset=${state.posts.length}`);
-  state.posts.push(...next);
-  state.hasMore = next.length === PAGE;
-  btn.disabled = false;
-  renderFeed(true);
+  const { topic, sort } = state;
+  loadingMore = btn.disabled = true;
+  try {
+    const next = await api(postsUrl(topic.id, state.posts.length));
+    if (state.view !== "topic" || state.topic.id !== topic.id || state.sort !== sort) return false;
+    state.posts.push(...next);
+    state.hasMore = next.length === PAGE;
+    renderFeed(true);
+    return true;
+  } catch (e) {
+    toast(`Couldn't load more: ${e.message}`);
+    return false;
+  } finally {
+    loadingMore = btn.disabled = false;
+  }
 }
+
+/* Load the next page before the reader reaches the end. The observer only fires
+   on changes, so after a load we check again in case filters hid the new tiles. */
+const nearEnd = () => $("more-btn").getBoundingClientRect().top < innerHeight + 600;
+async function autoLoad() {
+  for (let i = 0; i < 3 && !$("more").hidden && nearEnd(); i++) if (!(await loadMore())) break;
+}
+new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) autoLoad(); }, { rootMargin: "600px" })
+  .observe($("more"));
 
 async function refreshTopic() {
   const btn = $("refresh");
   btn.classList.add("is-busy");
   btn.disabled = true;
   try {
-    if (state.view === "search") return await runSearch(state.query, true);
+    if (state.view === "search") return await runSearch(state.query, true, false);
     const t = state.topic;
-    if (!state.posts.length) skeleton();
+    const first = !state.posts.length;
+    if (first) skeleton();
     const r = await api(`/api/topics/${t.id}/refresh`, { method: "POST" });
-    const posts = await api(`/api/topics/${t.id}/posts?limit=${PAGE}`);
+    const posts = await api(postsUrl(t.id));
     if (state.view !== "topic" || state.topic.id !== t.id) return;
     state.posts = posts;
+    // On the first fill every post is new, so labels would be noise.
+    state.newKeys = first ? new Set() : new Set(r.new_keys);
+    toast(first ? `Saved ${r.saved} post${r.saved === 1 ? "" : "s"}` : r.new ? `${r.new} new post${r.new === 1 ? "" : "s"}` : "No new posts");
     state.hasMore = posts.length === PAGE;
     const topics = await loadTopics();
     state.topic = topics.find((x) => x.id === t.id) || t;
@@ -269,9 +362,11 @@ async function refreshTopic() {
   }
 }
 
-async function openFavorites() {
+async function openFavorites(nav = "push") {
   state.searchAbort?.abort();
-  Object.assign(state, { view: "favorites", topic: null, hasMore: false });
+  setHash("#favorites", nav);
+  if (state.view !== "favorites") { state.findQuery = ""; $("find-q").value = ""; }
+  Object.assign(state, { view: "favorites", topic: null, hasMore: false, newKeys: new Set() });
   $("save").disabled = true;
   markNav();
   showErrors();
@@ -384,12 +479,24 @@ function openViewer(i) {
   refreshViewerPanel();
   if (!viewer.open) viewer.showModal();
   updateSteps();
+  warmNeighbours();
+}
+
+/* Fetch the next and previous posts' first picture so stepping feels instant.
+   Never touches video bytes, and does nothing when the user asked to save data. */
+function warmNeighbours() {
+  if (navigator.connection?.saveData) return;
+  const order = visibleIndexes();
+  const at = order.indexOf(state.viewerIndex);
+  for (const j of [order[at + 1], order[at - 1]]) {
+    const p = state.posts[j];
+    const src = p && safe(p.media_type === "image" ? p.images[0] : p.thumbnail_url);
+    if (src) new Image().src = src;
+  }
 }
 
 function closeViewer() {
-  $("stage").innerHTML = ""; // stops playback and frees the video
-  state.viewerIndex = -1;
-  if (viewer.open) viewer.close();
+  if (viewer.open) viewer.close(); // the close handler stops playback and frees the video
 }
 
 function stepPost(dir) {
@@ -434,10 +541,27 @@ function renderStage() {
         <button class="icon-btn img-step r" type="button" data-img="1" aria-label="Next image" ${k === n - 1 ? "disabled" : ""}>${icon("right")}</button>
         <div class="carousel-nav">${p.images.map((_, j) => `<button type="button" data-goto="${j}" aria-label="Image ${j + 1}" aria-current="${j === k}"></button>`).join("")}</div>` : ""}`;
     // Warm the next image so stepping through is instant.
-    if (k + 1 < n) new Image().src = p.images[k + 1];
+    if (k + 1 < n && safe(p.images[k + 1])) new Image().src = p.images[k + 1];
+    const img = stage.querySelector("img");
+    img.addEventListener("error", () => { if (img.isConnected) brokenImage(p); }, { once: true });
     return;
   }
   stage.innerHTML = `<div class="noimg"><p>${esc(p.text)}</p></div>`;
+}
+
+function brokenImage(p) {
+  const label = PLATFORMS[p.platform] || p.platform;
+  $("stage").innerHTML = `<div class="noimg"><p>${esc(p.text || "This image couldn't be loaded.")}</p>
+    ${safe(p.url) ? `<a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener">${icon("external")}<span>Open on ${esc(label)}</span></a>` : ""}</div>`;
+}
+
+function alsoHtml(p) {
+  if (!p.also_on?.length) return "";
+  const items = p.also_on.map((a) => {
+    const label = esc(PLATFORMS[a.platform] || a.platform);
+    return safe(a.url) ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${label}</a>` : label;
+  });
+  return `<div class="also">Also on ${items.join(" · ")}</div>`;
 }
 
 function refreshViewerPanel() {
@@ -452,6 +576,7 @@ function refreshViewerPanel() {
     ${when ? `<div class="sub">${esc(when)}</div>` : ""}
     ${p.text ? `<p class="full">${esc(p.text)}</p>` : ""}
     ${statsHtml(p)}
+    ${alsoHtml(p)}
     ${cacheHtml(fav)}
     <div class="actions">
       <button class="btn${fav ? "" : " ghost"}" type="button" data-act="fav" aria-pressed="${!!fav}">${icon("star")}<span>${fav ? "Starred" : "Star"}</span></button>
@@ -465,6 +590,7 @@ async function loadTopics() {
   $("topics-empty").hidden = topics.length > 0;
   $("topics").innerHTML = topics.map((t) => `<li class="topic">
       <button class="topic-btn" type="button" data-id="${t.id}"><span>${esc(t.name)}</span><span class="count">${t.post_count}</span></button>
+      <button class="topic-edit" type="button" data-edit="${t.id}" aria-label="Rename topic ${esc(t.name)}" title="Rename">${icon("pen")}</button>
       <button class="topic-del" type="button" data-del="${t.id}" aria-label="Delete topic ${esc(t.name)}">${icon("trash")}</button>
     </li>`).join("");
   state.topicList = topics;
@@ -501,21 +627,62 @@ $("save").addEventListener("click", async () => {
     if (state.view === "search" && state.query.toLowerCase() === name.toLowerCase() && state.posts.length) {
       await api(`/api/topics/${t.id}/refresh`, { method: "POST" });
       const topics = await loadTopics();
-      return openTopic(topics.find((x) => x.id === t.id) || t);
+      // Replace, so Back doesn't re-run the search that was just saved.
+      return openTopic(topics.find((x) => x.id === t.id) || t, "replace");
     }
-    openTopic(t);
+    openTopic(t, "replace");
   } catch (e) { toast(e.message); }
 });
 $("refresh").addEventListener("click", refreshTopic);
-$("more-btn").addEventListener("click", loadMore);
-$("nav-favs").addEventListener("click", openFavorites);
+
+let findTimer;
+$("find-q").addEventListener("input", (e) => {
+  clearTimeout(findTimer);
+  findTimer = setTimeout(() => { state.findQuery = e.target.value.trim().toLowerCase(); applyFilters(); }, 200);
+});
+$("find-q").addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.preventDefault(); e.target.value = ""; state.findQuery = ""; applyFilters(); }
+});
+
+/* Rename a topic in place. Enter saves, Esc or leaving the field cancels. */
+function editTopic(li, t) {
+  if (!li || !t || li.querySelector(".topic-form")) return;
+  li.innerHTML = `<form class="topic-form"><input value="${esc(t.name)}" aria-label="Topic name" required></form>`;
+  const input = li.querySelector("input");
+  let done = false;
+  const finish = () => { if (!done) { done = true; loadTopics(); } };
+  input.focus();
+  input.select();
+  input.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); finish(); } });
+  input.addEventListener("blur", finish);
+  li.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (!name || name === t.name) return finish();
+    try {
+      const updated = await api(`/api/topics/${t.id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+      if (state.view === "topic" && state.topic?.id === t.id) {
+        state.topic = { ...state.topic, ...updated };
+        state.query = updated.name;
+        $("q").value = updated.name;
+        setHeader(updated.name, topicSub(state.topic), true);
+      }
+      toast("Renamed. The next refresh searches for the new name");
+    } catch (err) { toast(err.message); }
+    finish();
+  });
+}
+$("more-btn").addEventListener("click", () => loadMore());
+$("nav-favs").addEventListener("click", () => openFavorites());
 
 $("topics").addEventListener("click", async (e) => {
+  const edit = e.target.closest("[data-edit]");
+  if (edit) return editTopic(edit.closest(".topic"), state.topicList.find((t) => t.id === +edit.dataset.edit));
   const del = e.target.closest("[data-del]");
   if (del) {
     const id = +del.dataset.del;
     await api(`/api/topics/${id}`, { method: "DELETE" });
-    if (state.view === "topic" && state.topic?.id === id) goHome();
+    if (state.view === "topic" && state.topic?.id === id) goHome("replace");
     return loadTopics();
   }
   const b = e.target.closest(".topic-btn");
@@ -546,6 +713,10 @@ $("chips").addEventListener("click", (e) => {
   c.setAttribute("aria-pressed", String(!state.hiddenPlatforms.has(k)));
   applyFilters();
 });
+$("sort").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-sort]");
+  if (b) setSort(b.dataset.sort);
+});
 $("kind").addEventListener("click", (e) => {
   const b = e.target.closest("[data-kind]");
   if (!b) return;
@@ -569,9 +740,33 @@ viewer.addEventListener("click", (e) => {
   if (act === "fav") toggleFav(p);
   else if (act === "retry") retry(p);
 });
-viewer.addEventListener("close", () => { $("stage").innerHTML = ""; state.viewerIndex = -1; });
+viewer.addEventListener("close", () => {
+  const last = state.viewerIndex;
+  $("stage").innerHTML = "";
+  state.viewerIndex = -1;
+  // j/k in the viewer moves between posts, so return focus to the last one viewed.
+  tileAt(last)?.querySelector(".tile-open")?.focus({ preventScroll: true });
+  tileAt(last)?.scrollIntoView({ block: "nearest" });
+});
+
+/* ---------- shortcut sheet + phone library panel ---------- */
+const keys = $("keys");
+let keysOpener = null;
+function openKeys() {
+  if (keys.open || viewer.open) return;
+  keysOpener = document.activeElement;
+  keys.showModal();
+}
+keys.addEventListener("close", () => keysOpener?.focus?.({ preventScroll: true }));
+keys.addEventListener("click", (e) => { if (e.target === keys || e.target.closest("[data-close]")) keys.close(); });
+$("open-keys").addEventListener("click", openKeys);
+$("library").addEventListener("click", () => {
+  const open = $("rail").classList.toggle("is-open");
+  $("library").setAttribute("aria-expanded", String(open));
+});
 
 document.addEventListener("keydown", (e) => {
+  if (keys.open) return; // the dialog's own Esc closes it
   if (viewer.open) {
     const p = state.posts[state.viewerIndex];
     if (e.target.tagName === "VIDEO" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
@@ -587,11 +782,38 @@ document.addEventListener("keydown", (e) => {
     else if (e.key === "f") toggleFav(p);
     return;
   }
-  if (e.key === "/" && document.activeElement !== $("q")) { e.preventDefault(); $("q").focus(); }
+  if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+  if (e.key === "/") { e.preventDefault(); $("q").focus(); }
+  else if (e.key === "?") { e.preventDefault(); openKeys(); }
+  else if (e.key === "j" || e.key === "k") { focusTile(e.key === "j" ? 1 : -1); e.preventDefault(); }
+  else if (e.key === "f") {
+    const tile = document.activeElement?.closest?.("#feed .tile");
+    if (tile) toggleFav(state.posts[+tile.dataset.i]);
+  }
 });
+
+const isTyping = (el) => el?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName);
+const tileAt = (i) => (i >= 0 ? $("feed").querySelector(`.tile[data-i="${i}"]`) : null);
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
+/* j/k scan the feed: focus moves across visible tiles; Enter opens, f stars. */
+function focusTile(dir) {
+  const order = visibleIndexes();
+  if (!order.length) return;
+  const cur = document.activeElement?.closest?.("#feed .tile");
+  const at = cur && !cur.hidden ? order.indexOf(+cur.dataset.i) : -1;
+  const next = at < 0 ? order[0] : order[Math.min(order.length - 1, Math.max(0, at + dir))];
+  const el = tileAt(next);
+  el.querySelector(".tile-open").focus({ preventScroll: true });
+  el.scrollIntoView({ block: "nearest", behavior: reduceMotion.matches ? "auto" : "smooth" });
+}
 document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(); });
 
-function goHome() {
+function goHome(nav = "push") {
+  state.searchAbort?.abort();
+  setHash("", nav);
+  $("q").value = "";
+  $("save").disabled = true;
   Object.assign(state, { view: "home", posts: [], topic: null, query: "" });
   setHeader("Find what people are posting", "One search pulls posts from X, Instagram, Xiaohongshu, TikTok and LinkedIn.");
   markNav();
@@ -599,5 +821,7 @@ function goHome() {
 }
 
 /* ---------- boot ---------- */
-goHome();
-Promise.all([loadTopics(), loadFavorites(), loadSources(), loadStorage()]).catch((e) => toast(e.message));
+for (const x of $("sort").children) x.setAttribute("aria-pressed", String(x.dataset.sort === state.sort));
+if (parseHash(location.hash).view === "home") goHome(false);
+addEventListener("popstate", () => { closeViewer(); route(); });
+Promise.all([loadTopics(), loadFavorites(), loadSources(), loadStorage()]).catch((e) => toast(e.message)).finally(route);

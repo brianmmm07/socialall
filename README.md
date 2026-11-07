@@ -5,10 +5,19 @@ LinkedIn in one feed. Save topics, refresh them, and browse the results in a web
 UI, through a JSON API, or from the command line.
 
 - **Watch videos and browse images** in a full-screen viewer (keyboard: ←/→ images,
-  ↑/↓ posts, `f` to star, `Esc` to close).
+  ↑/↓ posts, `f` to star, `Esc` to close). In the feed, `j`/`k` move between
+  posts, `Enter` opens one and `f` stars it. Press `?` for the full list.
+- **Sort topics by Recent or Top**, see which posts are **new** after a refresh,
+  and scroll: the next page loads on its own.
+- **Cross-posts collapse:** the same text posted on several platforms shows once,
+  with "Also on …" links.
+- **Links work:** the address bar tracks the view (`#q=coffee`, `#topic=3`,
+  `#favorites`), so reload, Back and bookmarks land where you were.
 - **Star posts** to keep them in Favourites. Videos of starred posts are
   downloaded to a local folder (`cache/videos/` by default) and play from there,
-  so they still work offline or after the platform removes them.
+  so they still work offline or after the platform removes them. Find a
+  favourite with the search box in that view, and export them all as Markdown or
+  JSON from the sidebar.
 
 It runs with no API keys at all: until you add credentials it shows sample
 ("demo") posts so you can try the app.
@@ -27,7 +36,9 @@ Command line:
 ```bash
 socialall platforms                          # which platforms are set up
 socialall search "AI agents" --limit 10
-socialall search "coffee" --platforms x,tiktok --json
+socialall search "coffee" --platforms x,tiktok --json   # exits 1 if every platform failed
+socialall export --format md -o favourites.md        # or --format json; prints if no -o
+socialall cache --prune                              # cache size; delete videos with no favourite
 ```
 
 API docs are at `http://127.0.0.1:8000/docs` once the server is running.
@@ -37,11 +48,13 @@ API docs are at `http://127.0.0.1:8000/docs` once the server is running.
 | `GET /api/search?q=...&platforms=x,tiktok&limit=20` | Live search across platforms |
 | `GET /api/platforms` | Which platforms are configured |
 | `GET/POST /api/topics`, `DELETE /api/topics/{id}` | Saved topics |
-| `POST /api/topics/{id}/refresh` | Collect new posts for a topic and store them |
-| `GET /api/topics/{id}/posts?platform=x` | Stored posts for a topic |
+| `PATCH /api/topics/{id}` | Rename a topic or change its `platforms`; stored posts are kept |
+| `POST /api/topics/{id}/refresh` | Collect posts for a topic; returns `saved`, `new` and `new_keys` |
+| `GET /api/topics/{id}/posts?platform=x&sort=recent\|top` | Stored posts for a topic |
 | `GET/POST /api/favorites`, `DELETE /api/favorites/{platform}/{id}` | Favourites; starring a video starts its download |
 | `POST /api/favorites/{platform}/{id}/retry` | Retry a failed video download |
 | `GET /api/favorites/storage` | Cache folder location, file count and size |
+| `GET /api/favorites/export?format=md\|json` | Download your favourites |
 | `GET /cache/<file>` | Cached videos (supports seeking) |
 
 ## Mac app
@@ -58,7 +71,9 @@ Starring a post saves it in the database. If the post has a direct video file
 into `SOCIALALL_CACHE_DIR` as `<platform>-<post id>.mp4`. Downloads stream to a
 `.part` file and are renamed when complete, run two at a time, and stop at
 `SOCIALALL_MAX_VIDEO_MB` (default 500). Unstarring deletes the file. Downloads
-cut off by a restart resume on the next start.
+cut off by a restart resume on the next start. On start the app also removes
+leftover `.part` files and videos whose favourite is gone; it only ever deletes
+files named like its own (`<platform>-<id>.mp4|webm|mov`).
 
 TikTok's official API gives no video file, only an embeddable player, so TikTok
 favourites are kept but play online only.

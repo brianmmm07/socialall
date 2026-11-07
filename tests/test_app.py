@@ -22,13 +22,15 @@ def media_handler(request):
 
 @pytest.fixture
 def client(tmp_path):
+    store = Store(":memory:")
     app = create_app(
-        store=Store(":memory:"),
+        store=store,
         client=httpx.AsyncClient(transport=httpx.MockTransport(media_handler)),
         cache_dir=str(tmp_path / "videos"),
     )
     with TestClient(app) as c:
         c.cache_dir = tmp_path / "videos"
+        c.app_store = store
         yield c
 
 
@@ -73,6 +75,31 @@ def test_topic_lifecycle(client):
     assert client.get("/api/topics").json()[0]["post_count"] == 20
     assert client.delete(f"/api/topics/{t['id']}").status_code == 204
     assert client.get("/api/topics").json() == []
+
+
+def test_refresh_reports_new_posts(client):
+    t = client.post("/api/topics", json={"name": "AI agents"}).json()
+    first = client.post(f"/api/topics/{t['id']}/refresh").json()
+    assert first["new"] == 20 and len(first["new_keys"]) == 20
+    assert all(":" in k for k in first["new_keys"])
+    second = client.post(f"/api/topics/{t['id']}/refresh").json()
+    assert second["saved"] == 20 and second["new"] == 0 and second["new_keys"] == []
+
+
+def test_topic_posts_sort_top(client):
+    from datetime import datetime, timezone
+    from socialall.models import Post
+
+    t = client.post("/api/topics", json={"name": "sorting"}).json()
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    posts = [Post(platform="x", id=str(i), likes=l, created_at=when) for i, l in enumerate([5, None, 50, 1])]
+    client.app_store.save_posts(t["id"], posts)
+    url = f"/api/topics/{t['id']}/posts"
+    likes = [p["likes"] for p in client.get(url, params={"sort": "top"}).json()]
+    assert likes == [50, 5, 1, None]
+    paged = [p["id"] for off in range(4) for p in client.get(url, params={"sort": "top", "limit": 1, "offset": off}).json()]
+    assert paged == ["2", "0", "3", "1"]
+    assert client.get(url, params={"sort": "bogus"}).status_code == 422
 
 
 def test_one_platform_failing_does_not_break_search(client, monkeypatch):
@@ -157,3 +184,54 @@ def test_non_video_link_is_rejected(fav_client):
 
 def test_favorite_unknown_post_is_404(fav_client):
     assert fav_client.post("/api/favorites", json={"platform": "x", "id": "nope"}).status_code == 404
+
+
+def test_rename_topic_and_edit_platforms(client):
+    t = client.post("/api/topics", json={"name": "AI agnets"}).json()
+    client.post("/api/topics", json={"name": "coffee"})
+    client.post(f"/api/topics/{t['id']}/refresh")
+    url = f"/api/topics/{t['id']}"
+    r = client.patch(url, json={"name": "  AI agents "})
+    assert r.status_code == 200 and r.json()["name"] == "AI agents"
+    assert len(client.get(f"{url}/posts").json()) == 20  # posts kept
+    assert client.patch(url, json={"name": "ai AGENTS"}).status_code == 200  # case-only change
+    assert client.patch(url, json={"name": "Coffee"}).status_code == 409
+    assert client.patch(url, json={"name": " "}).status_code == 422
+    assert client.patch(url, json={"platforms": ["myspace"]}).status_code == 422
+    assert client.patch(url, json={"platforms": ["x", "tiktok"]}).json()["platforms"] == ["x", "tiktok"]
+    assert client.patch(url, json={"platforms": []}).json()["platforms"] is None
+    assert client.patch("/api/topics/999", json={"name": "x"}).status_code == 404
+
+
+def test_export_favorites(fav_client, tmp_path, monkeypatch, capsys):
+    from socialall import cli
+    from socialall.models import Post
+
+    empty = fav_client.get("/api/favorites/export", params={"format": "md"})
+    assert empty.status_code == 200 and "No favourites yet" in empty.text
+    favorite(fav_client, Post(platform="xiaohongshu", id="p1", text="咖啡 [guide]\nline two",
+                              author="小红", url="https://xhs.test/p1", media_type="image"))
+    md = fav_client.get("/api/favorites/export", params={"format": "md"})
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in md.headers["content-disposition"]
+    assert "<https://xhs.test/p1>" in md.text and "咖啡 \\[guide\\] line two" in md.text
+    js = fav_client.get("/api/favorites/export").json()
+    assert js[0]["post"]["id"] == "p1" and js[0]["cache_url"] is None
+    assert fav_client.get("/api/favorites/export", params={"format": "csv"}).status_code == 422
+
+    db = tmp_path / "cli.db"
+    s = Store(str(db))
+    s.add_favorite(Post(platform="x", id="9", url="https://x.test/9"), "not_cacheable")
+    s.close()
+    monkeypatch.setenv("SOCIALALL_DB", str(db))
+    out = tmp_path / "favs.json"
+    cli.main(["export", "--format", "json", "-o", str(out)])
+    import json
+    assert json.loads(out.read_text(encoding="utf-8"))[0]["post"]["url"] == "https://x.test/9"
+
+
+def test_static_files_revalidate(client):
+    r = client.get("/static/app.js")
+    assert r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
+    again = client.get("/static/app.js", headers={"If-None-Match": r.headers["etag"]})
+    assert again.status_code == 304
