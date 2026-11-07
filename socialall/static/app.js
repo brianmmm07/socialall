@@ -261,16 +261,35 @@ function topicSub(t) {
   return `${t.post_count ?? state.posts.length} saved posts${t.refreshed_at ? ` · updated ${ago(t.refreshed_at)}` : ""}`;
 }
 
+let loadingMore = false;
 async function loadMore() {
-  if (state.view !== "topic") return;
+  if (state.view !== "topic" || !state.hasMore || loadingMore) return false;
   const btn = $("more-btn");
-  btn.disabled = true;
-  const next = await api(postsUrl(state.topic.id, state.posts.length));
-  state.posts.push(...next);
-  state.hasMore = next.length === PAGE;
-  btn.disabled = false;
-  renderFeed(true);
+  const { topic, sort } = state;
+  loadingMore = btn.disabled = true;
+  try {
+    const next = await api(postsUrl(topic.id, state.posts.length));
+    if (state.view !== "topic" || state.topic.id !== topic.id || state.sort !== sort) return false;
+    state.posts.push(...next);
+    state.hasMore = next.length === PAGE;
+    renderFeed(true);
+    return true;
+  } catch (e) {
+    toast(`Couldn't load more: ${e.message}`);
+    return false;
+  } finally {
+    loadingMore = btn.disabled = false;
+  }
 }
+
+/* Load the next page before the reader reaches the end. The observer only fires
+   on changes, so after a load we check again in case filters hid the new tiles. */
+const nearEnd = () => $("more-btn").getBoundingClientRect().top < innerHeight + 600;
+async function autoLoad() {
+  for (let i = 0; i < 3 && !$("more").hidden && nearEnd(); i++) if (!(await loadMore())) break;
+}
+new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) autoLoad(); }, { rootMargin: "600px" })
+  .observe($("more"));
 
 async function refreshTopic() {
   const btn = $("refresh");
@@ -418,6 +437,20 @@ function openViewer(i) {
   refreshViewerPanel();
   if (!viewer.open) viewer.showModal();
   updateSteps();
+  warmNeighbours();
+}
+
+/* Fetch the next and previous posts' first picture so stepping feels instant.
+   Never touches video bytes, and does nothing when the user asked to save data. */
+function warmNeighbours() {
+  if (navigator.connection?.saveData) return;
+  const order = visibleIndexes();
+  const at = order.indexOf(state.viewerIndex);
+  for (const j of [order[at + 1], order[at - 1]]) {
+    const p = state.posts[j];
+    const src = p && safe(p.media_type === "image" ? p.images[0] : p.thumbnail_url);
+    if (src) new Image().src = src;
+  }
 }
 
 function closeViewer() {
@@ -466,10 +499,18 @@ function renderStage() {
         <button class="icon-btn img-step r" type="button" data-img="1" aria-label="Next image" ${k === n - 1 ? "disabled" : ""}>${icon("right")}</button>
         <div class="carousel-nav">${p.images.map((_, j) => `<button type="button" data-goto="${j}" aria-label="Image ${j + 1}" aria-current="${j === k}"></button>`).join("")}</div>` : ""}`;
     // Warm the next image so stepping through is instant.
-    if (k + 1 < n) new Image().src = p.images[k + 1];
+    if (k + 1 < n && safe(p.images[k + 1])) new Image().src = p.images[k + 1];
+    const img = stage.querySelector("img");
+    img.addEventListener("error", () => { if (img.isConnected) brokenImage(p); }, { once: true });
     return;
   }
   stage.innerHTML = `<div class="noimg"><p>${esc(p.text)}</p></div>`;
+}
+
+function brokenImage(p) {
+  const label = PLATFORMS[p.platform] || p.platform;
+  $("stage").innerHTML = `<div class="noimg"><p>${esc(p.text || "This image couldn't be loaded.")}</p>
+    ${safe(p.url) ? `<a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener">${icon("external")}<span>Open on ${esc(label)}</span></a>` : ""}</div>`;
 }
 
 function refreshViewerPanel() {
@@ -578,7 +619,7 @@ function editTopic(li, t) {
     finish();
   });
 }
-$("more-btn").addEventListener("click", loadMore);
+$("more-btn").addEventListener("click", () => loadMore());
 $("nav-favs").addEventListener("click", openFavorites);
 
 $("topics").addEventListener("click", async (e) => {

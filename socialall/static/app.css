@@ -288,6 +288,7 @@ h1, h2, p { margin: 0; }
 .stage video { width: 100%; height: 100%; background: oklch(0.2 0.015 55); }
 .stage iframe { width: min(100%, 56.25dvh); height: 100dvh; border: 0; background: oklch(0.2 0.015 55); }
 .stage .noimg { color: var(--text-3); padding: 40px; text-align: center; max-width: 520px; }
+.stage .noimg .btn { margin-top: 24px; }
 .stage .noimg p { font-size: 22px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .carousel-nav { position: absolute; inset: auto 0 18px; display: flex; justify-content: center; gap: 6px; }
 .carousel-nav button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 50%; background: oklch(1 0 0 / 0.55); box-shadow: 0 0 0 1px oklch(0.3 0.03 55 / 0.15); cursor: pointer; transition: background 160ms, scale 160ms; }

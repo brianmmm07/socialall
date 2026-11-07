@@ -43,6 +43,15 @@ class FavoriteIn(BaseModel):
     id: str
 
 
+class AppFiles(StaticFiles):
+    """The app's own JS and CSS: always revalidate (cheap 304 via ETag) so updates show at once."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class SearchCache:
     """Short-lived memory cache so repeat searches don't spend API quota."""
 
@@ -93,7 +102,7 @@ def create_app(
 
     app = FastAPI(title="SocialAll", version="0.2.0", lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
-    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    app.mount("/static", AppFiles(directory=STATIC), name="static")
     # Cached videos. StaticFiles supports Range requests, so seeking works.
     app.mount("/cache", StaticFiles(directory=folder, check_dir=False), name="cache")
 

@@ -228,3 +228,10 @@ def test_export_favorites(fav_client, tmp_path, monkeypatch, capsys):
     cli.main(["export", "--format", "json", "-o", str(out)])
     import json
     assert json.loads(out.read_text(encoding="utf-8"))[0]["post"]["url"] == "https://x.test/9"
+
+
+def test_static_files_revalidate(client):
+    r = client.get("/static/app.js")
+    assert r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
+    again = client.get("/static/app.js", headers={"If-None-Match": r.headers["etag"]})
+    assert again.status_code == 304
