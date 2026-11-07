@@ -57,8 +57,8 @@ def test_collect_collapses_across_connectors():
 
 @pytest.mark.parametrize("error, message", [
     (TimeoutError(), "Timed out after 15s"),
-    (ConnectorError("HTTP 401: nope", status=401), "API key was rejected, check settings"),
-    (ConnectorError("HTTP 403: nope", status=403), "API key was rejected, check settings"),
+    (ConnectorError("HTTP 401: nope", status=401), "API key was rejected. Check it in Accounts"),
+    (ConnectorError("HTTP 403: nope", status=403), "API key was rejected. Check it in Accounts"),
     (ConnectorError("HTTP 429: slow down", status=429), "Rate limited, try again in a few minutes"),
     (httpx.ConnectError("dns failure"), "Couldn't reach the platform"),
     (RuntimeError("x" * 300), "x" * 119 + "…"),

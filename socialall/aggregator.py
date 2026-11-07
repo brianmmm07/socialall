@@ -25,7 +25,7 @@ def friendly_error(e: BaseException, timeout: float) -> str:
     if isinstance(e, TimeoutError | httpx.TimeoutException):
         return f"Timed out after {timeout:g}s"
     if status in (401, 403):
-        return "API key was rejected, check settings"
+        return "API key was rejected. Check it in Accounts"
     if status == 429:
         return "Rate limited, try again in a few minutes"
     if isinstance(e, httpx.ConnectError):

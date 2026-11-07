@@ -19,16 +19,20 @@ UI, through a JSON API, or from the command line.
   favourite with the search box in that view, and export them all as Markdown or
   JSON from the sidebar.
 
-It runs with no API keys at all: until you add credentials it shows sample
+It runs with no API keys at all: until you connect a platform it shows sample
 ("demo") posts so you can try the app.
+
+- **Connect accounts in the app.** Open **Accounts** in the sidebar. X, Instagram
+  (through Meta) and LinkedIn have **Sign in** buttons; TikTok and Xiaohongshu
+  take their keys in a short form. Each platform shows whether it's connected and
+  as whom, and **Test** checks the keys with one cheap call.
 
 ## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env        # add the keys you have
-socialall serve             # open http://127.0.0.1:8000
+socialall serve             # open http://127.0.0.1:8000, then Accounts
 ```
 
 Command line:
@@ -89,17 +93,60 @@ favourites are kept but play online only.
   nothing jumps; videos are only created when you open one, and stopped when you
   close the viewer. Filters hide and show tiles without rebuilding the feed.
 
+## Connecting accounts
+
+Open **Accounts** in the sidebar (or click a source under Sources).
+
+- **Sign in (OAuth)** for X, Instagram and LinkedIn. These platforms only let a
+  *developer app* sign people in, so you create a free app on the platform's
+  developer site once: paste its ID and secret into the card, add the callback
+  URL the card shows (for example `http://127.0.0.1:8000/api/accounts/x/callback`)
+  to the app, then press **Sign in**. SocialAll keeps the token, and renews X's
+  token by itself. Instagram tokens last about 60 days and LinkedIn's 60 days;
+  the card says when one is close to running out.
+- **Paste keys** for TikTok (Research API client key and secret) and
+  Xiaohongshu (your bridge URL), or for any platform if you already have a token.
+- **Test** makes one cheap call and shows the account it found, or the
+  platform's own error.
+- **Disconnect** forgets what the app saved (keys in `.env` still apply).
+
+Keys are saved in the **macOS Keychain** (through
+[keyring](https://pypi.org/project/keyring/), as one item named *SocialAll*), or
+the system keyring on Windows and Linux. With no keyring available they go in
+`credentials.json`, readable only by you, in the config folder
+(`~/Library/Application Support/SocialAll` on a Mac, `~/.config/socialall`
+elsewhere; change it with `SOCIALALL_CONFIG_DIR`). `accounts.json` there holds
+only which account is connected and the last test result. Set
+`SOCIALALL_KEYRING=off` to use the file instead of the keychain.
+
+**`.env` still works.** A value saved in the app wins; anything you don't set in
+the app is read from `.env` or the environment, as before.
+
+The account endpoints refuse changes sent from other websites.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /api/accounts` | Every platform: connected or not, as whom, where its keys come from (secrets are masked) |
+| `PUT /api/accounts/{platform}` | Save keys: `{"values": {"X_BEARER_TOKEN": "..."}}`; `null` removes one |
+| `POST /api/accounts/{platform}/test` | Check the keys with one call |
+| `DELETE /api/accounts/{platform}` | Forget saved keys (`?forget_app=true` also forgets the OAuth app's ID and secret) |
+| `GET /api/accounts/{platform}/signin` | Start OAuth sign-in (X, Instagram, LinkedIn) |
+
 ## Platforms and the credentials you need
+
+Each row's names are also the `.env` names. For sign-in, the app ID and secret
+are `X_CLIENT_ID`/`X_CLIENT_SECRET`, `META_APP_ID`/`META_APP_SECRET` and
+`LINKEDIN_CLIENT_ID`/`LINKEDIN_CLIENT_SECRET`.
 
 Each platform is a connector in `socialall/connectors/`. A platform with
 missing keys is skipped, and if one platform fails the others still return.
 
 | Platform | How it gets content | What you need |
 | --- | --- | --- |
-| **X** | Official API v2 recent search (last 7 days) | `X_BEARER_TOKEN` from developer.x.com, on a plan that includes search (Basic or higher, paid) |
-| **Instagram** | Official Graph API hashtag search. The topic becomes a hashtag ("machine learning" → `#machinelearning`) | A Meta app, an Instagram Business or Creator account linked to a Facebook Page, a long-lived `INSTAGRAM_ACCESS_TOKEN` with `instagram_basic`, and `INSTAGRAM_USER_ID`. Limit: 30 unique hashtags per 7 days |
+| **X** | Official API v2 recent search (last 7 days) | Sign in with X, or `X_BEARER_TOKEN` from developer.x.com. Either way the app needs a plan that includes search (Basic or higher, paid) |
+| **Instagram** | Official Graph API hashtag search. The topic becomes a hashtag ("machine learning" → `#machinelearning`) | A Meta app and an Instagram Business or Creator account linked to a Facebook Page. Sign in with Facebook finds the account for you; or set a long-lived `INSTAGRAM_ACCESS_TOKEN` with `instagram_basic` and `INSTAGRAM_USER_ID`. Limit: 30 unique hashtags per 7 days |
 | **TikTok** | Official Research API keyword query (last 30 days) | `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` from an **approved** Research API application. Access is mostly limited to academic researchers |
-| **LinkedIn** | Official Posts API. LinkedIn has no public keyword search, so it reads posts from the authors you list and keeps the ones that mention the topic | `LINKEDIN_ACCESS_TOKEN` (Community Management API, `r_organization_social`) and `LINKEDIN_AUTHOR_URNS`, e.g. `urn:li:organization:12345` |
+| **LinkedIn** | Official Posts API. LinkedIn has no public keyword search, so it reads posts from the authors you list and keeps the ones that mention the topic | Sign in with LinkedIn (an app with the Community Management API, `r_organization_social`) or `LINKEDIN_ACCESS_TOKEN`, plus `LINKEDIN_AUTHOR_URNS`, e.g. `urn:li:organization:12345` |
 | **Xiaohongshu** | No official API. Calls a "bridge" HTTP service you run (for example a self-hosted crawler) | `XHS_BRIDGE_URL`, optional `XHS_BRIDGE_TOKEN`. Scraping may break Xiaohongshu's terms, so check before using it |
 
 ### Xiaohongshu bridge contract
@@ -117,8 +164,10 @@ Authorization: Bearer {XHS_BRIDGE_TOKEN}   (only if set)
 ## Adding a platform
 
 1. Create `socialall/connectors/<name>.py` with a `Connector` subclass: set
-   `name`, `label`, `required_env`, `notes`, and implement
-   `async def search(self, topic, limit) -> list[Post]`.
+   `name`, `label`, `required_env`, `notes`, and `fields` (what the Accounts
+   screen asks for), and implement `async def search(self, topic, limit) -> list[Post]`.
+   Override `verify()` with a cheap call for the Test button, and set `oauth`
+   plus `authorize_url()` and `finish_oauth()` if the platform offers sign-in.
 2. Add the class to `CONNECTORS` in `socialall/connectors/__init__.py`.
 3. Add a test using `httpx.MockTransport` (see `tests/test_connectors.py`).
 

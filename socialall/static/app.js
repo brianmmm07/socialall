@@ -7,7 +7,7 @@ const stored = (k, fallback) => { try { return localStorage.getItem(k) ?? fallba
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 const state = {
-  view: "home",        // home | search | topic | favorites
+  view: "home",        // home | search | topic | favorites | accounts
   query: "",
   topic: null,
   posts: [],           // posts in the current view, newest first
@@ -133,8 +133,9 @@ function emptyHtml() {
     return `<div class="empty-state"><h2>No favourites yet</h2><p>Press the star on any post to keep it here. Videos you star are saved to a folder on this computer so they play offline.</p></div>`;
   if (state.view === "home")
     return `<div class="empty-state"><h2>Start with a topic</h2><p>Type anything: a brand, a hashtag, a person, an idea. Results from every connected platform land here, newest first.</p>
+      ${state.demo ? `<p>You're seeing sample posts until you connect a platform. <button class="linkish" type="button" data-acct="">Connect accounts</button></p>` : ""}
       <div class="suggest">${["AI agents", "street food", "climate tech", "咖啡"].map((t) => `<button class="btn ghost" type="button" data-suggest="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>`;
-  return `<div class="empty-state"><h2>Nothing found</h2><p>No platform returned posts for this topic. Try a broader word, or check the sources on the left.</p></div>`;
+  return `<div class="empty-state"><h2>Nothing found</h2><p>No platform returned posts for this topic. Try a broader word, or <button class="linkish" type="button" data-acct="">check your accounts</button>.</p></div>`;
 }
 
 function skeleton(n = 8) {
@@ -181,13 +182,19 @@ function showErrors(errors) {
   const n = $("notice");
   n.hidden = !entries.length;
   n.innerHTML = entries.length
-    ? `${icon("alert")}<div>${entries.map(([k, v]) => `<div><b>${esc(PLATFORMS[k] || k)}</b> didn't respond: ${esc(v)}</div>`).join("")}</div>`
+    ? `${icon("alert")}<div>${entries.map(([k, v]) => `<div><b>${esc(PLATFORMS[k] || k)}</b> didn't respond: ${esc(v)} <button class="linkish" type="button" data-acct="${esc(k)}">Open ${esc(PLATFORMS[k] || k)} account</button></div>`).join("")}</div>`
     : "";
 }
 
 function markNav() {
   const favs = $("nav-favs");
   state.view === "favorites" ? favs.setAttribute("aria-current", "page") : favs.removeAttribute("aria-current");
+  const accts = $("nav-accounts");
+  state.view === "accounts" ? accts.setAttribute("aria-current", "page") : accts.removeAttribute("aria-current");
+  const onAccounts = state.view === "accounts";
+  $("accounts").hidden = !onAccounts;
+  $("feed").hidden = onAccounts;
+  if (onAccounts) { $("filters").hidden = true; $("more").hidden = true; $("nomatch").hidden = true; }
   for (const b of document.querySelectorAll(".topic-btn")) {
     const on = state.view === "topic" && state.topic && +b.dataset.id === state.topic.id;
     on ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
@@ -197,8 +204,10 @@ function markNav() {
 /* ---------- views ---------- */
 /* ---------- deep links: #q=term, #topic=id, #favorites ---------- */
 function parseHash(h) {
-  const m = /^#(q|topic)=(.+)$/.exec(h);
+  const m = /^#(q|topic|accounts)=(.+)$/.exec(h);
   if (h === "#favorites") return { view: "favorites" };
+  if (h === "#accounts") return { view: "accounts" };
+  if (m?.[1] === "accounts") return { view: "accounts", focus: m[2] };
   if (m?.[1] === "topic" && /^\d+$/.test(m[2])) return { view: "topic", id: +m[2] };
   if (m?.[1] === "q") { try { const q = decodeURIComponent(m[2]).trim(); if (q) return { view: "search", q }; } catch {} }
   return { view: "home" };
@@ -215,6 +224,7 @@ async function route() {
   const r = parseHash(location.hash);
   if (r.view === "search") return runSearch(r.q, false, false);
   if (r.view === "favorites") return openFavorites(false);
+  if (r.view === "accounts") return openAccounts(false, r.focus);
   if (r.view === "topic") {
     const topics = state.topicList || (await loadTopics());
     const t = topics.find((x) => x.id === r.id);
@@ -600,9 +610,12 @@ async function loadTopics() {
 
 async function loadSources() {
   const list = await api("/api/platforms");
+  state.demo = list.some((p) => p.name === "demo");
+  const real = list.filter((p) => p.name !== "demo");
+  $("acct-count").textContent = `${real.filter((p) => p.configured).length}/${real.length}`;
   const demo = list.find((p) => p.name === "demo");
   $("sources").innerHTML = list.filter((p) => p.name !== "demo").map((p) =>
-    `<li data-p="${esc(p.name)}" title="${esc(p.notes)}"><span class="dot"></span>${esc(p.label)}<span class="state${p.configured ? " ready" : ""}">${p.configured ? "Connected" : "Needs keys"}</span></li>`).join("")
+    `<li data-p="${esc(p.name)}" data-acct="${esc(p.name)}" title="${p.configured ? "Manage" : "Connect"} ${esc(p.label)}"><span class="dot"></span>${esc(p.label)}<span class="state${p.configured ? " ready" : " todo"}">${p.configured ? "Connected" : "Connect"}</span></li>`).join("")
     + (demo ? `<li title="${esc(demo.notes)}"><span class="dot"></span>Sample posts<span class="state ready">On</span></li>` : "");
 }
 
@@ -613,6 +626,213 @@ async function loadStorage() {
     $("storage").title = s.folder;
   } catch {}
 }
+
+/* ---------- accounts ---------- */
+const accts = { list: [], open: new Set(), busy: new Set() };
+
+async function openAccounts(nav = "push", focus = null) {
+  state.searchAbort?.abort();
+  closeViewer();
+  setHash(focus ? `#accounts=${encodeURIComponent(focus)}` : "#accounts", nav);
+  Object.assign(state, { view: "accounts", topic: null, posts: [], hasMore: false, newKeys: new Set() });
+  $("feed").innerHTML = "";
+  $("q").value = "";
+  $("save").disabled = true;
+  markNav();
+  showErrors();
+  setHeader("Accounts", "Connect the platforms you want SocialAll to search.");
+  if (focus && PLATFORMS[focus]) accts.open.add(focus);
+  await loadAccounts();
+  if (focus && PLATFORMS[focus]) {
+    $(`acct-${focus}`)?.scrollIntoView({ block: "start", behavior: reduceMotion.matches ? "auto" : "smooth" });
+    const p = accts.list.find((x) => x.name === focus);
+    if (p?.test) toast(p.test.ok ? `${p.label}: ${p.account || "connected"}` : `${p.label}: ${p.test.message}`);
+    setHash("#accounts", "replace"); // a reload shouldn't toast again
+  }
+}
+
+async function loadAccounts() {
+  try {
+    const r = await api("/api/accounts");
+    accts.list = r.platforms;
+    const n = r.platforms.filter((p) => p.connected).length;
+    $("acct-intro").innerHTML = `${icon("lock")}<span>Keys and sign-ins are saved in ${esc(r.store)}, never in the page. Keys in <code>.env</code> still work for any platform you don't set up here.</span>`;
+    setHeader("Accounts", `${n} of ${r.platforms.length} platforms connected`);
+    renderAccounts();
+  } catch (e) { toast(`Couldn't load accounts: ${e.message}`); }
+}
+
+function statusHtml(p) {
+  const src = p.source === "env" ? ` <span class="src">· from .env</span>` : p.source === "mixed" ? ` <span class="src">· app and .env</span>` : "";
+  const exp = p.expires_in_days != null && p.expires_in_days < 14 ? ` · sign-in expires in ${p.expires_in_days} day${p.expires_in_days === 1 ? "" : "s"}` : "";
+  if (p.connected && p.test?.ok) return `<p class="acct-status ok">${icon("check")}<span>Connected${p.account ? ` · ${esc(p.account)}` : ""}${esc(exp)}${src}</span></p>`;
+  if (p.connected && p.test && !p.test.ok) return `<p class="acct-status bad">${icon("alert")}<span>Not working: ${esc(p.test.message)}${src}</span></p>`;
+  if (p.connected) return `<p class="acct-status">${icon("check")}<span>Keys saved, not tested yet${esc(exp)}${src}</span></p>`;
+  if (p.test?.ok) return `<p class="acct-status">${icon("check")}<span>Signed in. Fill in the rest to finish</span></p>`;
+  if (p.test && !p.test.ok) return `<p class="acct-status bad">${icon("alert")}<span>${esc(p.test.message)}</span></p>`;
+  return `<p class="acct-status">Not connected${p.oauth ? " · sign in or paste a token" : " · add your keys"}</p>`;
+}
+
+function fieldHtml(p, f) {
+  const id = `f-${p.name}-${f.key}`;
+  const from = f.source === "env" ? "In .env" : "Saved";
+  const placeholder = f.secret ? (f.set ? `${from} ${f.value}. Type to replace` : f.placeholder || "Paste here") : f.placeholder;
+  const value = !f.secret && f.source === "app" ? f.value || "" : "";
+  const envNote = !f.secret && f.source === "env" ? ` (now from .env: ${f.value})` : "";
+  return `<label class="field" for="${id}"><span>${esc(f.label)}${f.required ? "" : " <em>optional</em>"}</span>
+    <input id="${id}" name="${esc(f.key)}" type="${f.secret ? "password" : "text"}" value="${esc(value)}" data-initial="${esc(value)}"
+      placeholder="${esc(placeholder)}" autocomplete="off" spellcheck="false" ${f.secret ? 'data-secret="1"' : ""}>
+    ${f.help || envNote ? `<small>${esc(f.help)}${esc(envNote)}</small>` : ""}</label>`;
+}
+
+function resultHtml(p) {
+  if (!p.test) return "";
+  const at = p.test.at ? new Date(p.test.at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  return `<p class="result ${p.test.ok ? "ok" : "bad"}">${icon(p.test.ok ? "check" : "alert")}<span>${p.test.ok ? `Last test worked${p.account ? `: ${esc(p.account)}` : ""}` : esc(p.test.message)} ${at ? `<span class="at">· ${esc(at)}</span>` : ""}</span></p>`;
+}
+
+function accountHtml(p) {
+  const open = accts.open.has(p.name);
+  const busy = accts.busy.has(p.name);
+  const o = p.oauth;
+  const signin = o ? `<section class="acct-section">
+      <div><h3>Sign in with ${esc(p.label === "Instagram" ? "Facebook (Meta)" : p.label)}</h3>
+      <p class="lead">${esc(p.label)} needs a developer app of your own. Set it up once, then sign in here and SocialAll keeps the token.</p></div>
+      <ol class="steps">${o.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
+      <div class="copy-row"><code>${esc(o.redirect_uri)}</code><button class="btn ghost sm" type="button" data-act="copy" data-copy="${esc(o.redirect_uri)}">${icon("copy")}<span>Copy</span></button></div>
+      <div class="fields">${o.app_fields.map((f) => fieldHtml(p, f)).join("")}</div>
+      <div class="row"><button class="btn" type="button" data-act="signin"${busy ? " disabled" : ""}>Sign in with ${esc(p.label === "Instagram" ? "Facebook" : p.label)}</button>
+        <a class="linkish" href="${esc(o.console_url)}" target="_blank" rel="noopener">Open the developer console</a></div>
+    </section>` : "";
+  const manual = `<section class="acct-section">
+      <div><h3>${o ? "Or paste keys" : "Keys"}</h3><p class="lead">${esc(p.notes)}</p></div>
+      <div class="fields">${p.fields.map((f) => fieldHtml(p, f)).join("")}</div>
+      <div class="row"><button class="btn${o ? " ghost" : ""}" type="submit"${busy ? " disabled" : ""}>Save and test</button>
+        ${p.docs_url ? `<a class="linkish" href="${esc(p.docs_url)}" target="_blank" rel="noopener">Where to get these</a>` : ""}</div>
+    </section>`;
+  const canDisconnect = p.source === "app" || p.source === "mixed" || p.method;
+  return `<article class="acct${open ? " is-open" : ""}" id="acct-${esc(p.name)}" data-name="${esc(p.name)}">
+    <div class="acct-head" data-p="${esc(p.name)}">
+      <span class="dot"></span>
+      <div class="acct-name"><h2>${esc(p.label)}</h2>${statusHtml(p)}</div>
+      <div class="acct-actions">
+        ${p.connected ? `<button class="btn ghost sm${busy ? " is-busy" : ""}" type="button" data-act="test"${busy ? " disabled" : ""}>${icon("refresh")}<span>Test</span></button>` : ""}
+        <button class="btn ${p.connected ? "ghost " : ""}sm" type="button" data-act="toggle" aria-expanded="${open}" aria-controls="acct-body-${esc(p.name)}">${open ? "Close" : p.connected ? "Manage" : "Connect"}</button>
+      </div>
+    </div>
+    <form class="acct-body" id="acct-body-${esc(p.name)}"${open ? "" : " hidden"}>
+      ${signin}${manual}
+      ${resultHtml(p)}
+      ${canDisconnect ? `<div class="row"><span class="spacer"></span><button class="linkish danger-link" type="button" data-act="disconnect">Disconnect ${esc(p.label)}</button></div>` : ""}
+    </form>
+  </article>`;
+}
+
+function renderAccounts() {
+  if (state.view !== "accounts") return;
+  // Keep what the user is typing when a card re-renders.
+  const typed = {};
+  for (const el of $("acct-list").querySelectorAll("input")) if (el.value !== el.dataset.initial) typed[el.id] = el.value;
+  $("acct-list").innerHTML = accts.list.map(accountHtml).join("");
+  for (const [id, v] of Object.entries(typed)) { const el = $(id); if (el) el.value = v; }
+}
+
+function changedValues(form) {
+  const values = {};
+  for (const el of form.querySelectorAll("input[name]")) {
+    const v = el.value.trim();
+    if (el.dataset.secret ? v : v !== el.dataset.initial.trim()) values[el.name] = v || null;
+  }
+  return values;
+}
+
+function replaceAccount(p) {
+  accts.list = accts.list.map((x) => (x.name === p.name ? p : x));
+}
+
+async function withBusy(name, fn) {
+  accts.busy.add(name);
+  renderAccounts();
+  try { return await fn(); } finally { accts.busy.delete(name); renderAccounts(); }
+}
+
+async function saveAccount(name, form, test = true) {
+  const values = changedValues(form);
+  return withBusy(name, async () => {
+    try {
+      if (Object.keys(values).length) {
+        replaceAccount(await api(`/api/accounts/${name}`, { method: "PUT", body: JSON.stringify({ values }) }));
+        for (const el of form.querySelectorAll("input[name]")) el.dataset.initial = el.value = el.dataset.secret ? "" : el.value.trim();
+      }
+      if (test) await testAccount(name, false);
+      return true;
+    } catch (e) { toast(e.message); return false; }
+  }).finally(afterAccountChange);
+}
+
+async function testAccount(name, busy = true) {
+  const run = async () => {
+    try {
+      const r = await api(`/api/accounts/${name}/test`, { method: "POST" });
+      replaceAccount(r.platform);
+      const label = PLATFORMS[name] || name;
+      toast(r.ok ? `${label} works${r.account ? `: ${r.account}` : ""}` : `${label}: ${r.message}`);
+    } catch (e) { toast(e.message); }
+  };
+  if (!busy) return run();
+  await withBusy(name, run);
+  afterAccountChange();
+}
+
+async function disconnectAccount(name) {
+  const label = PLATFORMS[name] || name;
+  if (!confirm(`Disconnect ${label}? SocialAll forgets the keys and sign-in it saved. Your app's ID and secret are kept so you can sign in again.`)) return;
+  try {
+    const p = await api(`/api/accounts/${name}`, { method: "DELETE" });
+    replaceAccount(p);
+    toast(p.connected ? `Removed. ${label} still has keys in .env` : `${label} disconnected`);
+  } catch (e) { toast(e.message); }
+  renderAccounts();
+  afterAccountChange();
+}
+
+function afterAccountChange() {
+  loadSources().then(() => { if (state.view === "accounts") setHeader("Accounts", `${accts.list.filter((p) => p.connected).length} of ${accts.list.length} platforms connected`); }).catch(() => {});
+}
+
+$("acct-list").addEventListener("click", async (e) => {
+  const card = e.target.closest(".acct");
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (!card || !act) return;
+  const name = card.dataset.name;
+  const form = card.querySelector("form");
+  if (act === "toggle") {
+    accts.open.has(name) ? accts.open.delete(name) : accts.open.add(name);
+    renderAccounts();
+    if (accts.open.has(name)) $(`acct-${name}`).querySelector("input")?.focus({ preventScroll: true });
+  } else if (act === "test") testAccount(name);
+  else if (act === "disconnect") disconnectAccount(name);
+  else if (act === "copy") {
+    try { await navigator.clipboard.writeText(e.target.closest("[data-copy]").dataset.copy); toast("Callback URL copied"); }
+    catch { toast("Couldn't copy. Select the URL and copy it"); }
+  } else if (act === "signin") {
+    if (!(await saveAccount(name, form, false))) return;
+    const p = accts.list.find((x) => x.name === name);
+    if (!p?.oauth?.ready) return toast(`Fill in your ${p.label} app's ID${p.oauth.app_fields.some((f) => f.key.endsWith("SECRET") && f.required) ? " and secret" : ""} first`);
+    location.href = `/api/accounts/${name}/signin`; // comes back to #accounts=<name>
+  }
+});
+$("acct-list").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const card = e.target.closest(".acct");
+  if (card) saveAccount(card.dataset.name, e.target);
+});
+$("nav-accounts").addEventListener("click", () => openAccounts());
+$("manage-sources").addEventListener("click", () => openAccounts());
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-acct]");
+  if (b && !b.closest("#acct-list")) openAccounts("push", b.dataset.acct || null);
+});
 
 /* ---------- events (delegated) ---------- */
 $("search").addEventListener("submit", (e) => { e.preventDefault(); runSearch($("q").value); });
@@ -785,6 +1005,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
   else if (e.key === "?") { e.preventDefault(); openKeys(); }
+  else if (state.view === "accounts") return;
   else if (e.key === "j" || e.key === "k") { focusTile(e.key === "j" ? 1 : -1); e.preventDefault(); }
   else if (e.key === "f") {
     const tile = document.activeElement?.closest?.("#feed .tile");

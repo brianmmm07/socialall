@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from ..models import Post
-from .base import Connector, ConnectorError, parse_time
+from .base import Connector, ConnectorError, Field, parse_time
 
 
 class TikTokConnector(Connector):
@@ -19,7 +19,12 @@ class TikTokConnector(Connector):
         "researchers and some commercial partners. Uses client-credentials auth."
     )
     base_url = "https://open.tiktokapis.com/v2"
-    fields = "id,video_description,create_time,username,like_count,comment_count,share_count,view_count"
+    docs_url = "https://developers.tiktok.com/products/research-api/"
+    fields = [
+        Field("TIKTOK_CLIENT_KEY", "Client key", secret=False),
+        Field("TIKTOK_CLIENT_SECRET", "Client secret"),
+    ]
+    video_fields = "id,video_description,create_time,username,like_count,comment_count,share_count,view_count"
 
     def __init__(self, client=None):
         super().__init__(client)
@@ -46,6 +51,10 @@ class TikTokConnector(Connector):
         self._token_expires = time.time() + int(data.get("expires_in", 7200))
         return self._token
 
+    async def verify(self) -> str:
+        await self._access_token()
+        return "Research API keys accepted"
+
     async def search(self, topic: str, limit: int = 20) -> list[Post]:
         token = await self._access_token()
         today = datetime.now(timezone.utc)
@@ -58,7 +67,7 @@ class TikTokConnector(Connector):
         data = self.check(
             await self.client.post(
                 f"{self.base_url}/research/video/query/",
-                params={"fields": self.fields},
+                params={"fields": self.video_fields},
                 json=body,
                 headers={"Authorization": f"Bearer {token}"},
             )
