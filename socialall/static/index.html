@@ -33,6 +33,10 @@
     <symbol id="i-disk" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
     <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/></symbol>
     <symbol id="i-pen" viewBox="0 0 24 24"><path d="M21.2 6.8a2.8 2.8 0 0 0-4-4L4 16l-1 5 5-1Z"/><path d="m15 5 4 4"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
   </defs>
 </svg>
@@ -55,6 +59,10 @@
       <svg class="icon" aria-hidden="true"><use href="#i-star"/></svg>
       <span>Favourites</span><span class="count" id="fav-count">0</span>
     </button>
+    <button class="nav-item" id="nav-accounts" type="button">
+      <svg class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
+      <span>Accounts</span><span class="count" id="acct-count"></span>
+    </button>
     <button class="nav-item library" id="library" type="button" aria-expanded="false" aria-controls="rail-foot">
       <svg class="icon" aria-hidden="true"><use href="#i-disk"/></svg><span>Library</span>
     </button>
@@ -62,7 +70,7 @@
     <ul class="topics" id="topics"></ul>
     <p class="rail-empty" id="topics-empty">Saved topics appear here. Search something, then press Save topic.</p>
     <div class="rail-foot" id="rail-foot">
-      <h2 class="rail-heading">Sources</h2>
+      <h2 class="rail-heading">Sources <button class="linkish manage" type="button" id="manage-sources">Manage</button></h2>
       <ul class="sources" id="sources"></ul>
       <p class="storage" id="storage"></p>
       <p class="export"><button class="linkish" type="button" id="open-keys">Keyboard shortcuts</button> <kbd>?</kbd></p>
@@ -98,6 +106,10 @@
       <div class="chips" id="chips" role="group" aria-label="Platforms"></div>
     </div>
     <div class="notice" id="notice" role="status" hidden></div>
+    <section class="accounts" id="accounts" aria-label="Accounts" hidden>
+      <p class="acct-intro" id="acct-intro"></p>
+      <div class="acct-list" id="acct-list"></div>
+    </section>
     <div class="feed" id="feed" aria-live="polite"></div>
     <p class="nomatch" id="nomatch" hidden>No favourites match.</p>
     <div class="more" id="more" hidden><button class="btn ghost" type="button" id="more-btn">Show more</button></div>

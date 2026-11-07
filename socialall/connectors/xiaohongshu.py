@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..models import Post
-from .base import Connector, parse_time
+from .base import Connector, ConnectorError, Field, parse_time
 
 
 class XiaohongshuConnector(Connector):
@@ -27,6 +27,19 @@ class XiaohongshuConnector(Connector):
         "returns notes for a keyword (see README for the JSON contract). "
         "Optional XHS_BRIDGE_TOKEN is sent as a Bearer token."
     )
+
+    fields = [
+        Field("XHS_BRIDGE_URL", "Bridge URL", secret=False, placeholder="http://127.0.0.1:5005/search",
+              help="A service you run that returns notes for a keyword. The README has the JSON it must return."),
+        Field("XHS_BRIDGE_TOKEN", "Bridge token", required=False, help="Sent as a Bearer token, if your bridge wants one."),
+    ]
+
+    async def verify(self) -> str:
+        url = self.setting("XHS_BRIDGE_URL") or ""
+        if not url.startswith(("http://", "https://")):
+            raise ConnectorError("The bridge URL must start with http:// or https://")
+        await self.search("test", 1)
+        return "Bridge answered"
 
     async def search(self, topic: str, limit: int = 20) -> list[Post]:
         headers = {}

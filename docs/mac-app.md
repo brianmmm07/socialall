@@ -42,7 +42,7 @@ Anything after `Start SocialAll.command` (or `socialall-app`, once installed) is
 | --- | --- |
 | `launch` | Start the background server if it isn't running, then open the window (the default) |
 | `stop` | Stop the background server |
-| `restart` | Restart it, for example after editing `.env` |
+| `restart` | Restart it, for example after editing `.env` (accounts connected in the app need no restart) |
 | `status` | Say whether it's running and whether it starts at login |
 | `autostart on`, `off`, `status` | Start SocialAll when you log in |
 | `serve` | Run the server with no window (what launch and start at login use) |

@@ -349,6 +349,67 @@ h1, h2, p { margin: 0; }
 }
 @keyframes rise { from { opacity: 0; translate: -50% 8px; } }
 
+/* Accounts: one card per platform */
+.rail-heading .manage { float: right; font-size: 12px; font-weight: 500; color: var(--text-3); }
+.sources li { cursor: pointer; border-radius: var(--r-sm); }
+.sources li:hover { color: var(--text); }
+.sources .state.warn { color: var(--danger); }
+.sources .state.todo { color: var(--accent); }
+#nav-accounts[aria-current="page"] .icon { fill: none; }
+.accounts { max-width: 760px; }
+.acct-intro { display: flex; gap: 8px; align-items: flex-start; color: var(--text-2); font-size: 14px; margin-bottom: 18px; }
+.acct-intro .icon { color: var(--text-3); margin-top: 2px; }
+.acct-list { display: grid; gap: 12px; }
+.acct { scroll-margin-top: 76px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-tile); transition: box-shadow 200ms var(--ease); }
+.acct.is-open { box-shadow: var(--shadow-lift); }
+.acct-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.acct-head .dot { width: 10px; height: 10px; }
+.acct-name { flex: 1; min-width: 0; }
+.acct-name h2 { font-size: 16px; font-weight: 600; }
+.acct-status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-3); margin-top: 1px; overflow-wrap: anywhere; }
+.acct-status .icon { width: 14px; height: 14px; flex: none; }
+.acct-status.ok { color: var(--ok); }
+.acct-status.bad { color: var(--danger); }
+.acct-status .src { color: var(--text-3); }
+.acct-actions { display: flex; gap: 8px; flex: none; }
+.btn.sm { height: 34px; padding: 0 12px; font-size: 13px; }
+.btn.is-busy { cursor: progress; }
+.acct-body { border-top: 1px solid var(--line); padding: 16px 16px 18px; display: grid; gap: 16px; }
+.acct-body h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.acct-body .lead { font-size: 13px; color: var(--text-2); margin-top: 2px; max-width: 62ch; }
+.acct-section { display: grid; gap: 12px; }
+.acct-section + .acct-section { padding-top: 16px; border-top: 1px dashed var(--line); }
+.steps { margin: 0; padding-left: 20px; font-size: 13px; color: var(--text-2); display: grid; gap: 4px; max-width: 64ch; }
+.copy-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r); }
+.copy-row code { flex: 1; min-width: 0; font: 500 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); overflow-wrap: anywhere; }
+.copy-row .btn { height: 30px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.field { display: grid; gap: 4px; font-size: 13px; align-content: start; }
+.field > span { font-weight: 500; color: var(--text); }
+.field > span em { font-style: normal; font-weight: 400; color: var(--text-3); }
+.field input {
+  height: 38px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.field input::placeholder { color: var(--text-3); }
+.field input:hover { border-color: var(--surface-3); }
+.field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field small { color: var(--text-3); font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row .spacer { flex: 1; }
+.row a.linkish, .row .linkish { font-size: 13px; color: var(--text-2); }
+.result { font-size: 13px; display: flex; gap: 6px; align-items: flex-start; }
+.result .icon { width: 15px; height: 15px; margin-top: 2px; }
+.result.ok { color: var(--ok); }
+.result.bad { color: var(--danger); }
+.result .at { color: var(--text-3); }
+.danger-link { color: var(--danger) !important; }
+@media (max-width: 560px) {
+  .acct-head { flex-wrap: wrap; }
+  .acct-actions { width: 100%; padding-left: 22px; }
+}
+
 @media (max-width: 900px) {
   .wordmark { width: auto; }
   .shell { grid-template-columns: 1fr; }

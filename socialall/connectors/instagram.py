@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import re
+import time
+from urllib.parse import urlencode
 
 from ..models import Post
-from .base import Connector, ConnectorError, parse_time
+from .base import Connector, ConnectorError, Field, OAuthSpec, parse_time
+
+SCOPES = "instagram_basic,pages_show_list,pages_read_engagement"
 
 
 class InstagramConnector(Connector):
@@ -23,10 +27,77 @@ class InstagramConnector(Connector):
         "unique hashtags per 7 days."
     )
 
+    docs_url = "https://developers.facebook.com/apps/"
+    fields = [
+        Field("INSTAGRAM_ACCESS_TOKEN", "Long-lived access token",
+              help="A user token with instagram_basic, from Graph API Explorer, exchanged for a long-lived one."),
+        Field("INSTAGRAM_USER_ID", "Instagram user ID", secret=False, placeholder="17841400000000000",
+              help="The id of your Instagram Business or Creator account (not the Facebook Page id)."),
+    ]
+    oauth = OAuthSpec(
+        app_fields=[
+            Field("META_APP_ID", "Meta App ID", secret=False),
+            Field("META_APP_SECRET", "App Secret"),
+        ],
+        console_url="https://developers.facebook.com/apps/",
+        steps=[
+            "Create a Business app on developers.facebook.com and add Facebook Login for Business.",
+            "Under Valid OAuth Redirect URIs, add the callback URL below.",
+            "Copy the App ID and App Secret (App settings → Basic) here, then sign in with the Facebook "
+            "account that manages the Page your Instagram Business or Creator account is linked to.",
+        ],
+    )
+
+    @property
+    def version(self) -> str:
+        return self.setting("INSTAGRAM_GRAPH_VERSION", "v21.0")
+
     @property
     def base_url(self) -> str:
-        version = self.setting("INSTAGRAM_GRAPH_VERSION", "v21.0")
-        return f"https://graph.facebook.com/{version}"
+        return f"https://graph.facebook.com/{self.version}"
+
+    # ---------- auth ----------
+    def authorize_url(self, redirect_uri: str, state: str, challenge: str) -> str:
+        return f"https://www.facebook.com/{self.version}/dialog/oauth?" + urlencode({
+            "client_id": self.setting("META_APP_ID"),
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "scope": SCOPES,
+            "response_type": "code",
+        })
+
+    async def finish_oauth(self, code: str, redirect_uri: str, verifier: str) -> str:
+        app = {"client_id": self.setting("META_APP_ID"), "client_secret": self.setting("META_APP_SECRET")}
+        url = f"{self.base_url}/oauth/access_token"
+        short = self.check(await self.client.get(url, params={**app, "redirect_uri": redirect_uri, "code": code}))
+        # Swap the one-hour token for a long-lived one (about 60 days).
+        long = self.check(await self.client.get(url, params={
+            **app, "grant_type": "fb_exchange_token", "fb_exchange_token": short["access_token"],
+        }))
+        token = long.get("access_token") or short["access_token"]
+        pages = self.check(await self.client.get(f"{self.base_url}/me/accounts", params={
+            "fields": "name,instagram_business_account{id,username}", "access_token": token,
+        }))
+        linked = [p["instagram_business_account"] for p in pages.get("data", []) if p.get("instagram_business_account")]
+        if not linked:
+            raise ConnectorError(
+                "Signed in, but none of your Facebook Pages has an Instagram Business or Creator account "
+                "linked. Link one in the Instagram app (Settings → Account type), then sign in again."
+            )
+        expires = long.get("expires_in")
+        self.save(
+            INSTAGRAM_ACCESS_TOKEN=token,
+            INSTAGRAM_USER_ID=str(linked[0]["id"]),
+            INSTAGRAM_TOKEN_EXPIRES=str(int(time.time()) + int(expires)) if expires else None,
+        )
+        return await self.verify()
+
+    async def verify(self) -> str:
+        data = self.check(await self.client.get(
+            f"{self.base_url}/{self.setting('INSTAGRAM_USER_ID')}",
+            params={"fields": "username", "access_token": self.setting("INSTAGRAM_ACCESS_TOKEN")},
+        ))
+        return f"@{data['username']}" if data.get("username") else "Connected"
 
     @staticmethod
     def to_hashtag(topic: str) -> str:

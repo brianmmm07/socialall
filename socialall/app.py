@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config, export
+from .accounts import accounts_router
 from .aggregator import collect
 from .connectors import DemoConnector, active_connectors, all_connectors
 from .models import Favorite, PlatformStatus, Post, SearchResult
@@ -66,6 +67,9 @@ class SearchCache:
         self._items.pop(key, None)
         return None
 
+    def clear(self) -> None:
+        self._items.clear()
+
     def put(self, key: tuple, result: SearchResult) -> None:
         if len(self._items) > 200:
             self._items.clear()
@@ -112,6 +116,13 @@ def create_app(
 
     def connectors():
         return active_connectors(state["client"])
+
+    def credentials_changed() -> None:
+        # Results fetched with the old keys (or demo posts) shouldn't be served from memory.
+        if cache := state.get("search_cache"):
+            cache.clear()
+
+    app.include_router(accounts_router(lambda: state["client"], credentials_changed))
 
     def timeout() -> float:
         return float(config.int_env("SOCIALALL_PLATFORM_TIMEOUT", 15))

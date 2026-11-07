@@ -1,12 +1,37 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 import httpx
 
-from ..config import env
+from .. import credentials
 from ..models import PlatformStatus, Post
+
+
+@dataclass
+class Field:
+    """One value a platform needs, as the Accounts screen asks for it."""
+
+    key: str  # also the .env name
+    label: str
+    secret: bool = True
+    required: bool = True
+    help: str = ""
+    placeholder: str = ""
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class OAuthSpec:
+    """How to sign in with the platform instead of pasting a token."""
+
+    app_fields: list[Field]  # the developer app's id and secret
+    console_url: str  # where to create that app
+    steps: list[str] = field(default_factory=list)
 
 
 class ConnectorError(RuntimeError):
@@ -28,6 +53,10 @@ class Connector(ABC):
     label: str = ""
     required_env: list[str] = []
     notes: str = ""
+    # For the Accounts screen: what to ask for, where to get it, and OAuth if offered.
+    fields: list[Field] = []
+    docs_url: str = ""
+    oauth: OAuthSpec | None = None
 
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client
@@ -39,7 +68,19 @@ class Connector(ABC):
         return self._client
 
     def setting(self, key: str, default: str | None = None) -> str | None:
-        return env(key, default)
+        """Saved in the app (keychain) first, then .env / the environment."""
+        return credentials.setting(key, default)
+
+    def save(self, **values: str | None) -> None:
+        credentials.store().update(values)
+
+    async def verify(self) -> str:
+        """Make one cheap call with the saved keys and say who they belong to.
+
+        Raises ConnectorError with a readable message when they don't work.
+        """
+        await self.search("news", 1)
+        return "Connected"
 
     def is_configured(self) -> bool:
         return all(self.setting(k) for k in self.required_env)
@@ -60,9 +101,29 @@ class Connector(ABC):
     @staticmethod
     def check(response: httpx.Response) -> dict:
         if response.status_code >= 400:
-            detail = response.text[:300]
+            detail = api_message(response) or response.text[:300]
             raise ConnectorError(f"HTTP {response.status_code}: {detail}", status=response.status_code)
         return response.json()
+
+
+def api_message(response: httpx.Response) -> str:
+    """The human part of a platform's error body, if it has one."""
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    error = data.get("error")
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    errors = data.get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict) and errors[0].get("message"):
+        return str(errors[0]["message"])
+    for key in ("error_description", "detail", "message", "title"):
+        if data.get(key):
+            return str(data[key])
+    return str(error) if isinstance(error, str) else ""
 
 
 def parse_time(value) -> datetime | None:
