@@ -44,6 +44,13 @@ API docs are at `http://127.0.0.1:8000/docs` once the server is running.
 | `GET /api/favorites/storage` | Cache folder location, file count and size |
 | `GET /cache/<file>` | Cached videos (supports seeking) |
 
+## Mac app
+
+On a Mac, double-click **Start SocialAll** (`Start SocialAll.command`) to run SocialAll
+like an app: the server stays in the background and SocialAll opens in its own
+window, which you can install with a Dock icon and start at login. The first run
+sets everything up. See [docs/mac-app.md](docs/mac-app.md).
+
 ## Favourites and the video cache
 
 Starring a post saves it in the database. If the post has a direct video file
