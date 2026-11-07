@@ -13,6 +13,11 @@ UI, through a JSON API, or from the command line.
   with "Also on …" links.
 - **Links work:** the address bar tracks the view (`#q=coffee`, `#topic=3`,
   `#favorites`), so reload, Back and bookmarks land where you were.
+- **Follow accounts for free, with no limit.** Add X, Instagram, TikTok,
+  LinkedIn company and Xiaohongshu accounts under **Following**, and their new
+  posts land in one stream you can filter and search. It reads them through
+  [RSSHub](https://docs.rsshub.app), which runs on your Mac. See
+  [Following accounts](#following-accounts-free-no-limit).
 - **Star posts** to keep them in Favourites. Videos of starred posts are
   downloaded to a local folder (`cache/videos/` by default) and play from there,
   so they still work offline or after the platform removes them. Find a
@@ -61,6 +66,10 @@ API docs are at `http://127.0.0.1:8000/docs` once the server is running.
 | `GET /api/favorites/storage` | Cache folder location, file count and size |
 | `GET /api/favorites/export?format=md\|json` | Download your favourites |
 | `GET /cache/<file>` | Cached videos (supports seeking) |
+| `GET/POST /api/following`, `DELETE /api/following/{id}` | Followed accounts, the feed service's state, and following one (`{"platform", "handle"}`, a name or a profile link) |
+| `GET /api/following/posts?q=...&platform=x` | Posts from followed accounts, newest first |
+| `POST /api/following/refresh` | Read every followed account now |
+| `POST /api/following/service/start` | Start RSSHub in Docker |
 
 ## Mac app
 
@@ -93,6 +102,48 @@ favourites are kept but play online only.
 - The page loads no framework. Images are lazy-loaded in fixed 4:5 frames so
   nothing jumps; videos are only created when you open one, and stopped when you
   close the viewer. Filters hide and show tiles without rebuilding the feed.
+
+## Following accounts (free, no limit)
+
+Searching a whole platform for free is capped (Apify's free plan is about 55
+searches a month). Following set accounts isn't: **Following** in the sidebar
+collects every new post from the accounts you add, checks for more every 15
+minutes (`SOCIALALL_FEED_MINUTES`, 0 turns it off), and lets you find anything
+in what it collected.
+
+It reads the accounts through [RSSHub](https://docs.rsshub.app), a free,
+open-source feed service that runs on your Mac in Docker:
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (free)
+   and open it once.
+2. Open **Following** and press **Start feed service**. The first start downloads
+   RSSHub, which takes a few minutes. After that it starts with Docker.
+3. Pick a platform and paste an account: `@name` or a profile link.
+
+| Platform | What you can follow | Login |
+| --- | --- | --- |
+| X | Any public account | A login token from a **spare** X account (below) |
+| Instagram | Public accounts | None |
+| TikTok | Any account | None |
+| LinkedIn | Company pages (`linkedin.com/company/…`), not people | None |
+| Xiaohongshu | Any account, by its profile link (`xiaohongshu.com/user/profile/…`) | None |
+
+X shows nothing to people who are signed out, so RSSHub needs the `auth_token`
+cookie of an X account: sign in to x.com in your browser, open Developer Tools →
+Application (Storage in Safari) → Cookies → x.com, and copy `auth_token` into the
+box on the Following page. Use a spare account, because X can lock accounts it
+thinks are automated. SocialAll keeps the token with your other keys and passes
+it to RSSHub when it starts it.
+
+The start button runs `docker run -d --name socialall-feeds -p 127.0.0.1:1200:1200
+diygod/rsshub:chromium-bundled` (the browser build, which LinkedIn and Xiaohongshu
+need), so RSSHub is only reachable from this Mac. If you already run RSSHub,
+set `RSSHUB_URL` to its address instead. Instagram and Xiaohongshu pictures are
+fetched by SocialAll itself (`/api/media`), because those sites refuse to show
+their images on other pages.
+
+The platforms don't allow reading their pages this way, and they may block you
+if you follow hundreds of accounts. Nothing here uses your own accounts.
 
 ## Connecting accounts
 

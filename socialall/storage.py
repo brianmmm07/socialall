@@ -46,6 +46,28 @@ CREATE TABLE IF NOT EXISTS favorites (
     PRIMARY KEY (platform, post_id)
 );
 CREATE INDEX IF NOT EXISTS favorites_by_time ON favorites(favorited_at DESC);
+-- Accounts followed through the feed service, and the posts read from them.
+CREATE TABLE IF NOT EXISTS follows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    handle TEXT NOT NULL COLLATE NOCASE,
+    name TEXT,
+    added_at TEXT NOT NULL,
+    checked_at TEXT,
+    error TEXT,
+    UNIQUE (platform, handle)
+);
+CREATE TABLE IF NOT EXISTS feed_posts (
+    platform TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    follow_id INTEGER NOT NULL REFERENCES follows(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    created_at TEXT,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (platform, post_id)
+);
+CREATE INDEX IF NOT EXISTS feed_by_time ON feed_posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS feed_by_follow ON feed_posts(follow_id);
 """
 
 FAVORITE_COLUMNS = "data, favorited_at, cache_status, cache_file, cache_bytes, cache_error"
@@ -66,6 +88,8 @@ class Store:
         # Keep the seen table small: posts not favourited go after a week.
         with self.conn:
             self.conn.execute("DELETE FROM seen WHERE seen_at < datetime('now', '-7 days')")
+            # Followed accounts' posts are kept for three months.
+            self.conn.execute("DELETE FROM feed_posts WHERE collected_at < datetime('now', '-90 days')")
 
     def close(self) -> None:
         self.conn.close()
@@ -180,6 +204,98 @@ class Store:
             "SELECT data FROM seen WHERE platform = ? AND post_id = ?", (platform, post_id)
         ).fetchone()
         return Post.model_validate_json(row["data"]) if row else None
+
+    # Followed accounts
+    def add_follow(self, platform: str, handle: str) -> tuple[dict, bool]:
+        """Follow an account. Returns (the follow, whether it's new)."""
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO follows(platform, handle, added_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(platform, handle) DO NOTHING",
+                (platform, handle, _now()),
+            )
+        row = self.conn.execute(
+            "SELECT id FROM follows WHERE platform = ? AND handle = ?", (platform, handle)
+        ).fetchone()
+        return self.get_follow(row["id"]), cur.rowcount > 0
+
+    def list_follows(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT f.*, (SELECT COUNT(*) FROM feed_posts p WHERE p.follow_id = f.id) AS post_count "
+            "FROM follows f ORDER BY f.added_at, f.id"
+        )
+        return [dict(r) for r in rows]
+
+    def get_follow(self, follow_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT f.*, (SELECT COUNT(*) FROM feed_posts p WHERE p.follow_id = f.id) AS post_count "
+            "FROM follows f WHERE f.id = ?", (follow_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete_follow(self, follow_id: int) -> bool:
+        with self.conn:
+            cur = self.conn.execute("DELETE FROM follows WHERE id = ?", (follow_id,))
+        return cur.rowcount > 0
+
+    def checked_follow(self, follow_id: int, error: str | None = None, name: str | None = None) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE follows SET checked_at = ?, error = ?, name = COALESCE(?, name) WHERE id = ?",
+                (_now(), error, name, follow_id),
+            )
+
+    def save_feed_posts(self, follow_id: int, posts: list[Post]) -> list[str]:
+        """Store posts read from a followed account. Returns the keys of posts not stored before."""
+        if not posts:
+            return []
+        now = _now()
+        with self.conn:
+            known = {
+                f"{r['platform']}:{r['post_id']}"
+                for r in self.conn.execute(
+                    f"SELECT platform, post_id FROM feed_posts WHERE (platform, post_id) IN "
+                    f"(VALUES {', '.join('(?, ?)' for _ in posts)})",
+                    [v for p in posts for v in (p.platform, p.id)],
+                )
+            }
+            self.conn.executemany(
+                "INSERT INTO feed_posts(platform, post_id, follow_id, data, created_at, collected_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(platform, post_id) DO UPDATE SET data = excluded.data",
+                [
+                    (p.platform, p.id, follow_id, p.model_dump_json(),
+                     p.created_at.isoformat() if p.created_at else None, now)
+                    for p in posts
+                ],
+            )
+        return list(dict.fromkeys(p.key for p in posts if p.key not in known))
+
+    def feed_posts(self, platform: str | None = None, q: str | None = None,
+                   limit: int = 60, offset: int = 0) -> list[Post]:
+        """Posts from followed accounts, newest first, optionally only those mentioning `q`."""
+        sql = "SELECT data FROM feed_posts WHERE 1 = 1"
+        args: list = []
+        if platform:
+            sql += " AND platform = ?"
+            args.append(platform)
+        if q and q.strip():
+            like = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            sql += (" AND (json_extract(data, '$.text') LIKE ? ESCAPE '\\'"
+                    " OR json_extract(data, '$.author') LIKE ? ESCAPE '\\')")
+            args += [like, like]
+        sql += " ORDER BY COALESCE(created_at, collected_at) DESC, platform, post_id LIMIT ? OFFSET ?"
+        args += [limit, offset]
+        return [Post.model_validate_json(r["data"]) for r in self.conn.execute(sql, args)]
+
+    def feed_post(self, platform: str, post_id: str) -> Post | None:
+        row = self.conn.execute(
+            "SELECT data FROM feed_posts WHERE platform = ? AND post_id = ?", (platform, post_id)
+        ).fetchone()
+        return Post.model_validate_json(row["data"]) if row else None
+
+    def feed_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM feed_posts").fetchone()[0]
 
     # Favourites
     def add_favorite(self, post: Post, cache_status: str) -> dict:

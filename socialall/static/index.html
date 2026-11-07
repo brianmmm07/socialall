@@ -37,6 +37,7 @@
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-feed" viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1" fill="currentColor"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
   </defs>
 </svg>
@@ -55,6 +56,10 @@
 
 <div class="shell">
   <nav class="rail" id="rail" aria-label="Library">
+    <button class="nav-item" id="nav-following" type="button">
+      <svg class="icon" aria-hidden="true"><use href="#i-feed"/></svg>
+      <span>Following</span><span class="count" id="follow-count"></span>
+    </button>
     <button class="nav-item" id="nav-favs" type="button">
       <svg class="icon" aria-hidden="true"><use href="#i-star"/></svg>
       <span>Favourites</span><span class="count" id="fav-count">0</span>
@@ -88,6 +93,7 @@
         <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg><span>Refresh</span>
       </button>
     </div>
+    <section class="follow" id="follow" aria-label="Followed accounts" hidden></section>
     <div class="filters" id="filters" hidden>
       <div class="seg" id="kind" role="group" aria-label="Media type">
         <button type="button" data-kind="all" aria-pressed="true">All</button>

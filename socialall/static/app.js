@@ -7,7 +7,7 @@ const stored = (k, fallback) => { try { return localStorage.getItem(k) ?? fallba
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 const state = {
-  view: "home",        // home | search | topic | favorites | accounts
+  view: "home",        // home | search | topic | following | favorites | accounts
   query: "",
   topic: null,
   posts: [],           // posts in the current view, newest first
@@ -16,7 +16,7 @@ const state = {
   kind: "all",
   sort: stored("sort", "recent") === "top" ? "top" : "recent",  // topic view only
   newKeys: new Set(),
-  findQuery: "",       // favourites view only, lower-cased  // posts that arrived in the last refresh of this topic
+  findQuery: "",       // favourites and following views, lower-cased
   offset: 0,
   hasMore: false,
   viewerIndex: -1,
@@ -27,7 +27,19 @@ const state = {
 
 /* ---------- helpers ---------- */
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const safe = (u) => (/^(https?:)?\/\//i.test(u || "") || /^\/cache\//.test(u || "") ? u : null);
+const safe = (u) => (/^(https?:)?\/\//i.test(u || "") || /^\/(cache\/|api\/media\?)/.test(u || "") ? u : null);
+/* Instagram and Xiaohongshu refuse to show their pictures on other sites, so those come through the app. */
+const PROXY_HOSTS = ["cdninstagram.com", "fbcdn.net", "xhscdn.com", "xhscdn.net"];
+function pic(u) {
+  const s = safe(u);
+  if (!s || s.startsWith("/")) return s;
+  try {
+    const url = new URL(s, location.href);
+    if (url.protocol === "https:" && PROXY_HOSTS.some((d) => url.hostname === d || url.hostname.endsWith(`.${d}`)))
+      return `/api/media?u=${encodeURIComponent(url.href)}`;
+  } catch {}
+  return s;
+}
 const keyOf = (p) => `${p.platform}:${p.id}`;
 const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto", style: "short" });
@@ -84,7 +96,7 @@ function tileHtml(p, i) {
   const key = keyOf(p);
   const fav = state.favs.get(key);
   const label = PLATFORMS[p.platform] || p.platform;
-  const thumb = safe(p.thumbnail_url || p.images[0]);
+  const thumb = pic(p.thumbnail_url || p.images[0]);
   const hasMedia = p.media_type !== "text";
   const priority = i < 6 ? ' fetchpriority="high"' : ' loading="lazy"';
   let frame = "";
@@ -129,6 +141,13 @@ function renderFeed(append = false) {
 }
 
 function emptyHtml() {
+  if (state.view === "following") {
+    const i = fol.info;
+    if (state.findQuery) return `<div class="empty-state"><h2>No posts match</h2><p>Nothing from the accounts you follow mentions “${esc(state.findQuery)}”.</p></div>`;
+    if (!i?.follows.length) return `<div class="empty-state"><h2>Your stream is empty</h2><p>Follow a few accounts above. Their new posts land here, newest first, and SocialAll ${checksEvery(i)}.</p></div>`;
+    if (!i.service.running) return `<div class="empty-state"><h2>Waiting for the feed service</h2><p>Start it above, and posts from the accounts you follow appear here.</p></div>`;
+    return `<div class="empty-state"><h2>No posts yet</h2><p>Press Refresh to check the accounts you follow now.</p></div>`;
+  }
   if (state.view === "favorites")
     return `<div class="empty-state"><h2>No favourites yet</h2><p>Press the star on any post to keep it here. Videos you star are saved to a folder on this computer so they play offline.</p></div>`;
   if (state.view === "home")
@@ -146,7 +165,7 @@ function skeleton(n = 8) {
 /* Filtering only toggles visibility, so it never rebuilds the feed. */
 function applyFilters() {
   let shown = 0;
-  const q = state.view === "favorites" ? state.findQuery : "";
+  const q = state.view === "favorites" ? state.findQuery : "";  // following asks the server instead
   const tiles = $("feed").querySelectorAll(".tile");
   for (const el of tiles) {
     // A collapsed cross-post shows while any of its platforms is shown.
@@ -164,9 +183,13 @@ function renderChips() {
   const counts = {};
   for (const p of state.posts) for (const k of [p.platform, ...(p.also_on || []).map((a) => a.platform)]) counts[k] = (counts[k] || 0) + 1;
   const present = Object.keys(PLATFORMS).filter((k) => counts[k]);
-  $("filters").hidden = !state.posts.length;
+  const following = state.view === "following";
+  $("filters").hidden = !state.posts.length && !(following && state.findQuery);
   $("sort").hidden = state.view !== "topic";
-  $("find").hidden = state.view !== "favorites";
+  $("find").hidden = state.view !== "favorites" && !following;
+  const hint = following ? "Find in these posts" : "Find in favourites";
+  $("find-q").placeholder = hint;
+  $("find-q").setAttribute("aria-label", hint);
   $("chips").innerHTML = present.map((k) =>
     `<button class="chip" type="button" data-p="${k}" aria-pressed="${!state.hiddenPlatforms.has(k)}"><span class="dot"></span>${PLATFORMS[k]}<span class="n">${counts[k]}</span></button>`).join("");
 }
@@ -189,6 +212,10 @@ function showErrors(errors) {
 function markNav() {
   const favs = $("nav-favs");
   state.view === "favorites" ? favs.setAttribute("aria-current", "page") : favs.removeAttribute("aria-current");
+  const follow = $("nav-following");
+  state.view === "following" ? follow.setAttribute("aria-current", "page") : follow.removeAttribute("aria-current");
+  $("follow").hidden = state.view !== "following";
+  if (state.view !== "following") stopServicePoll();
   const accts = $("nav-accounts");
   state.view === "accounts" ? accts.setAttribute("aria-current", "page") : accts.removeAttribute("aria-current");
   const onAccounts = state.view === "accounts";
@@ -206,6 +233,7 @@ function markNav() {
 function parseHash(h) {
   const m = /^#(q|topic|accounts)=(.+)$/.exec(h);
   if (h === "#favorites") return { view: "favorites" };
+  if (h === "#following") return { view: "following" };
   if (h === "#accounts") return { view: "accounts" };
   if (m?.[1] === "accounts") return { view: "accounts", focus: m[2] };
   if (m?.[1] === "topic" && /^\d+$/.test(m[2])) return { view: "topic", id: +m[2] };
@@ -224,6 +252,7 @@ async function route() {
   const r = parseHash(location.hash);
   if (r.view === "search") return runSearch(r.q, false, false);
   if (r.view === "favorites") return openFavorites(false);
+  if (r.view === "following") return openFollowing(false);
   if (r.view === "accounts") return openAccounts(false, r.focus);
   if (r.view === "topic") {
     const topics = state.topicList || (await loadTopics());
@@ -314,6 +343,7 @@ function topicSub(t) {
 
 let loadingMore = false;
 async function loadMore() {
+  if (state.view === "following") return loadMoreFollowing();
   if (state.view !== "topic" || !state.hasMore || loadingMore) return false;
   const btn = $("more-btn");
   const { topic, sort } = state;
@@ -348,6 +378,7 @@ async function refreshTopic() {
   btn.disabled = true;
   try {
     if (state.view === "search") return await runSearch(state.query, true, false);
+    if (state.view === "following") return await refreshFollowing();
     const t = state.topic;
     const first = !state.posts.length;
     if (first) skeleton();
@@ -500,7 +531,7 @@ function warmNeighbours() {
   const at = order.indexOf(state.viewerIndex);
   for (const j of [order[at + 1], order[at - 1]]) {
     const p = state.posts[j];
-    const src = p && safe(p.media_type === "image" ? p.images[0] : p.thumbnail_url);
+    const src = p && pic(p.media_type === "image" ? p.images[0] : p.thumbnail_url);
     if (src) new Image().src = src;
   }
 }
@@ -531,10 +562,15 @@ function renderStage() {
     const local = fav?.cache_status === "cached" ? fav.cache_url : null;
     const src = safe(local || p.video_url);
     if (src) {
-      const poster = safe(p.thumbnail_url);
+      const poster = pic(p.thumbnail_url);
       stage.innerHTML = `<video controls autoplay playsinline preload="auto" ${poster ? `poster="${esc(poster)}"` : ""} src="${esc(src)}"></video>`;
       const v = stage.querySelector("video");
-      v.addEventListener("error", () => { if (local && p.video_url) v.src = p.video_url; }, { once: true });
+      // A missing offline copy falls back to the original; a link that expired falls back to the platform's player.
+      const fallback = () => {
+        if (local && p.video_url && v.src !== new URL(p.video_url, location.href).href) v.src = p.video_url;
+        else if (safe(p.embed_url)) stage.innerHTML = `<iframe src="${esc(p.embed_url)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen title="Video player"></iframe>`;
+      };
+      v.addEventListener("error", fallback);
       return;
     }
     if (safe(p.embed_url)) {
@@ -545,13 +581,13 @@ function renderStage() {
   if (p.media_type === "image" && p.images.length) {
     const n = p.images.length;
     const k = state.imageIndex;
-    stage.innerHTML = `<img src="${esc(safe(p.images[k]))}" alt="Image ${k + 1} of ${n}">
+    stage.innerHTML = `<img src="${esc(pic(p.images[k]))}" alt="Image ${k + 1} of ${n}">
       ${n > 1 ? `
         <button class="icon-btn img-step l" type="button" data-img="-1" aria-label="Previous image" ${k === 0 ? "disabled" : ""}>${icon("left")}</button>
         <button class="icon-btn img-step r" type="button" data-img="1" aria-label="Next image" ${k === n - 1 ? "disabled" : ""}>${icon("right")}</button>
         <div class="carousel-nav">${p.images.map((_, j) => `<button type="button" data-goto="${j}" aria-label="Image ${j + 1}" aria-current="${j === k}"></button>`).join("")}</div>` : ""}`;
     // Warm the next image so stepping through is instant.
-    if (k + 1 < n && safe(p.images[k + 1])) new Image().src = p.images[k + 1];
+    if (k + 1 < n && pic(p.images[k + 1])) new Image().src = pic(p.images[k + 1]);
     const img = stage.querySelector("img");
     img.addEventListener("error", () => { if (img.isConnected) brokenImage(p); }, { once: true });
     return;
@@ -626,6 +662,282 @@ async function loadStorage() {
     $("storage").title = s.folder;
   } catch {}
 }
+
+/* ---------- following: accounts read through the free feed service (RSSHub) ---------- */
+const fol = { info: null, platform: stored("follow-platform", "instagram"), adding: null, busy: false, poll: null, loadSeq: 0 };
+
+async function openFollowing(nav = "push") {
+  state.searchAbort?.abort();
+  setHash("#following", nav);
+  if (state.view !== "following") { state.findQuery = ""; $("find-q").value = ""; }
+  Object.assign(state, { view: "following", topic: null, posts: [], hasMore: false, newKeys: new Set() });
+  $("q").value = "";
+  $("save").disabled = true;
+  markNav();
+  showErrors();
+  setHeader("Following", "Loading…", false);
+  skeleton(4);
+  await loadFollowing();
+  if (state.view !== "following") return;
+  await loadFollowPosts();
+}
+
+async function loadFollowing() {
+  try {
+    fol.info = await api("/api/following");
+  } catch (e) {
+    toast(`Couldn't load Following: ${e.message}`);
+    return null;
+  }
+  $("follow-count").textContent = fol.info.follows.length || "";
+  if (state.view === "following") {
+    renderFollowPanel();
+    followHeader();
+  }
+  if (fol.info.service.starting) startServicePoll();
+  return fol.info;
+}
+
+const checksEvery = (i) => (i?.every_minutes ?? 15) > 0 ? `checks for more every ${i?.every_minutes ?? 15} minutes` : "checks when you press Refresh";
+
+function followHeader() {
+  const i = fol.info;
+  if (!i) return;
+  const n = i.follows.length;
+  const checked = i.refreshed_at ? `checked ${ago(i.refreshed_at)}` : checksEvery(i);
+  setHeader("Following", n ? `${n} account${n === 1 ? "" : "s"} · ${i.posts} post${i.posts === 1 ? "" : "s"} · ${checked}`
+    : "Follow accounts and see their new posts in one stream. Free, with no limit.", n > 0 && i.service.running);
+}
+
+const followPostsUrl = (offset = 0) =>
+  `/api/following/posts?limit=${PAGE}&offset=${offset}${state.findQuery ? `&q=${encodeURIComponent(state.findQuery)}` : ""}`;
+
+async function loadFollowPosts() {
+  const seq = ++fol.loadSeq;
+  try {
+    const posts = await api(followPostsUrl());
+    if (state.view !== "following" || seq !== fol.loadSeq) return;
+    state.posts = posts;
+    state.hasMore = posts.length === PAGE;
+    renderFeed();
+  } catch (e) { toast(`Couldn't load posts: ${e.message}`); }
+}
+
+async function loadMoreFollowing() {
+  if (!state.hasMore || loadingMore) return false;
+  const btn = $("more-btn");
+  const seq = fol.loadSeq;
+  loadingMore = btn.disabled = true;
+  try {
+    const next = await api(followPostsUrl(state.posts.length));
+    if (state.view !== "following" || seq !== fol.loadSeq) return false;
+    state.posts.push(...next);
+    state.hasMore = next.length === PAGE;
+    renderFeed(true);
+    return true;
+  } catch (e) {
+    toast(`Couldn't load more: ${e.message}`);
+    return false;
+  } finally {
+    loadingMore = btn.disabled = false;
+  }
+}
+
+async function refreshFollowing(quiet = false) {
+  const r = await api("/api/following/refresh", { method: "POST" });
+  if (r.offline) { if (!quiet) toast("The feed service isn't running. Start it above"); }
+  else if (!quiet) toast(r.new ? `${r.new} new post${r.new === 1 ? "" : "s"}` : "No new posts");
+  await loadFollowing();
+  if (state.view !== "following") return;
+  const first = !state.posts.length;
+  await loadFollowPosts();
+  state.newKeys = first ? new Set() : new Set(r.new_keys || []);
+  if (state.newKeys.size) renderFeed();
+}
+
+function serviceHtml(s) {
+  if (s.running) return "";
+  const steps = [];
+  if (!s.local) {
+    steps.push(`SocialAll reads feeds from <code>${esc(s.url)}</code>, which isn't answering. Check that RSSHub is running there.`);
+  } else {
+    steps.push(s.docker ? `Open <b>Docker Desktop</b> and wait until it says it's running.`
+      : `Install <a href="${esc(s.docker_url)}" target="_blank" rel="noopener">Docker Desktop</a> (free) and open it once.`);
+    steps.push(`Press <b>Start feed service</b>. The first start is a large download and takes a few minutes. After that it starts whenever Docker does.`);
+  }
+  const status = s.starting ? `<p class="svc-step">${icon("refresh")}<span>${esc(s.step || "Starting")}…</span></p>`
+    : s.error ? `<p class="result bad">${icon("alert")}<span>${esc(s.error)}</span></p>` : "";
+  return `<div class="follow-card svc">
+      <div class="svc-head"><span class="tag">Free</span><div><h2>Start the feed service</h2>
+        <p class="lead">RSSHub reads the accounts you follow. It's free, open source, and runs only on this Mac.</p></div></div>
+      <ol class="steps big">${steps.map((x) => `<li>${x}</li>`).join("")}</ol>
+      ${s.local ? `<div class="row"><button class="btn${s.starting ? " is-busy" : ""}" type="button" data-act="start"${s.starting ? " disabled" : ""}>${icon("refresh")}<span>${s.starting ? "Starting…" : "Start feed service"}</span></button>
+        <a class="linkish" href="${esc(fol.info.docs_url)}" target="_blank" rel="noopener">About RSSHub</a></div>` : ""}
+      ${status}
+    </div>`;
+}
+
+function xTokenHtml(i) {
+  const t = i.x_token;
+  const from = t.source === "env" ? "in .env" : "saved";
+  return `<div class="xtoken" data-p="x">
+      <p class="note">${icon("lock")}<span><b>X shows nothing to people who are signed out</b>, so the feed service needs a login token from an X account. Use a spare account, not your main one: X can lock accounts it thinks are automated.</span></p>
+      <label class="field" for="x-token"><span>${esc(t.label)}</span>
+        <input id="x-token" name="${esc(t.key)}" type="password" autocomplete="off" spellcheck="false"
+          placeholder="${esc(t.set ? `Token ${from} ${t.value}. Paste to replace` : t.placeholder)}">
+        <small>${esc(t.help)}</small></label>
+      <div class="row"><button class="btn ghost sm" type="button" data-act="save-token">Save token</button>
+        ${t.set && t.source === "app" ? `<button class="linkish danger-link" type="button" data-act="remove-token">Remove token</button>` : ""}</div>
+    </div>`;
+}
+
+function followChip(f) {
+  const bad = f.error ? ` is-bad" title="${esc(f.error)}` : "";
+  return `<li class="fchip${bad}" data-p="${esc(f.platform)}">
+      <span class="dot"></span><a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.label)}</a>
+      ${f.error ? icon("alert") : `<span class="n">${f.post_count}</span>`}
+      <button type="button" data-unfollow="${f.id}" aria-label="Unfollow ${esc(f.label)}" title="Unfollow">${icon("x")}</button>
+    </li>`;
+}
+
+function renderFollowPanel() {
+  const i = fol.info;
+  if (!i || state.view !== "following") return;
+  const typed = $("follow-handle")?.value || "";
+  const token = $("x-token")?.value || "";
+  const adding = fol.adding ?? !i.follows.length;
+  const plat = i.platforms.find((p) => p.name === fol.platform) || i.platforms[0];
+  const xHelp = (plat.name === "x" && adding) || i.follows.some((f) => f.platform === "x" && f.error);
+  const errors = i.follows.filter((f) => f.error);
+  $("follow").innerHTML = `
+    ${serviceHtml(i.service)}
+    ${i.follows.length ? `<div class="follow-bar">
+        <ul class="follow-list">${i.follows.map(followChip).join("")}</ul>
+        ${adding ? "" : `<button class="btn ghost sm" type="button" data-act="adding">${icon("plus")}<span>Follow another</span></button>`}
+      </div>
+      ${errors.length ? `<ul class="follow-errors">${errors.map((f) => `<li data-p="${esc(f.platform)}"><span class="dot"></span><b>${esc(f.label)}</b> ${esc(f.error)}</li>`).join("")}</ul>` : ""}` : ""}
+    ${adding ? `<form class="follow-card follow-add" id="follow-add">
+        <div class="add-head"><h2>Follow an account</h2>${i.follows.length ? `<button class="linkish" type="button" data-act="adding">Done</button>` : ""}</div>
+        <div class="seg plats" role="group" aria-label="Platform">${i.platforms.map((p) =>
+          `<button type="button" data-plat="${esc(p.name)}" data-p="${esc(p.name)}" aria-pressed="${p.name === plat.name}"><span class="dot"></span>${esc(p.label)}</button>`).join("")}</div>
+        <div class="add-row">
+          <input id="follow-handle" name="handle" type="text" autocomplete="off" spellcheck="false" autocapitalize="off"
+            placeholder="${esc(plat.placeholder)}" aria-label="${esc(plat.label)} account" required>
+          <button class="btn" type="submit"${fol.busy ? " disabled" : ""}>${icon("plus")}<span>${fol.busy ? "Adding…" : "Follow"}</span></button>
+        </div>
+        <p class="note">${esc(plat.help)}</p>
+      </form>` : ""}
+    ${xHelp ? xTokenHtml(i) : ""}`;
+  if ($("follow-handle")) $("follow-handle").value = typed;
+  if ($("x-token")) $("x-token").value = token;
+}
+
+async function followAccount(form) {
+  const input = form.querySelector("#follow-handle");
+  const handle = input.value.trim();
+  if (!handle || fol.busy) return;
+  fol.busy = true;
+  renderFollowPanel();
+  try {
+    const r = await api("/api/following", { method: "POST", body: JSON.stringify({ platform: fol.platform, handle }) });
+    const label = r.follow.label;
+    toast(!r.created ? `Already following ${label}`
+      : r.offline ? `Following ${label}. Start the feed service to load its posts`
+      : r.error ? `Following ${label}, but: ${r.error}`
+      : `Following ${label} · ${r.new} post${r.new === 1 ? "" : "s"}`);
+    if ($("follow-handle")) $("follow-handle").value = "";
+  } catch (e) { toast(e.message); }
+  fol.busy = false;
+  fol.adding ??= true;  // keep the form open for the next one until Done
+  await loadFollowing();
+  await loadFollowPosts();
+  $("follow-handle")?.focus({ preventScroll: true });
+}
+
+async function unfollow(id) {
+  const f = fol.info?.follows.find((x) => x.id === id);
+  if (!f) return;
+  try { await api(`/api/following/${id}`, { method: "DELETE" }); toast(`Unfollowed ${f.label}`); }
+  catch (e) { toast(e.message); }
+  await loadFollowing();
+  await loadFollowPosts();
+}
+
+async function saveXToken(remove = false) {
+  const value = remove ? null : $("x-token")?.value.trim();
+  if (!remove && !value) return toast("Paste the auth_token value first");
+  if (remove && !confirm("Remove the X login token? Accounts you follow on X stop updating.")) return;
+  try {
+    const r = await api("/api/following/settings", { method: "PUT", body: JSON.stringify({ values: { TWITTER_AUTH_TOKEN: value } }) });
+    if ($("x-token")) $("x-token").value = "";
+    fol.info = r;
+    toast(remove ? "X token removed" : r.restarted ? "Token saved. Restarting the feed service to use it" : "Token saved");
+    if (r.restarted) startServicePoll();
+  } catch (e) { return toast(e.message); }
+  renderFollowPanel();
+  followHeader();
+}
+
+async function startService() {
+  try {
+    fol.info.service = await api("/api/following/service/start", { method: "POST" });
+  } catch (e) { return toast(e.message); }
+  renderFollowPanel();
+  startServicePoll();
+}
+
+/* While the service starts, check on it every few seconds. Once it answers, read the feeds. */
+function startServicePoll() {
+  if (fol.poll) return;
+  fol.poll = setInterval(async () => {
+    if (document.hidden || !fol.info) return;
+    let s;
+    try { s = await api("/api/following/service"); } catch { return; }
+    const was = fol.info.service;
+    fol.info.service = s;
+    if (s.starting) return renderFollowPanel();
+    stopServicePoll();
+    if (s.running && !was.running) {
+      toast("The feed service is running");
+      await refreshFollowing(true);
+    } else if (s.running) {
+      await refreshFollowing(true);  // restarted with a new token
+    } else {
+      renderFollowPanel();
+      followHeader();
+      renderFeed();
+    }
+  }, 2500);
+}
+function stopServicePoll() { clearInterval(fol.poll); fol.poll = null; }
+
+$("follow").addEventListener("click", (e) => {
+  const plat = e.target.closest("[data-plat]");
+  if (plat) {
+    fol.platform = plat.dataset.plat;
+    store("follow-platform", fol.platform);
+    renderFollowPanel();
+    return $("follow-handle")?.focus({ preventScroll: true });
+  }
+  const un = e.target.closest("[data-unfollow]");
+  if (un) return unfollow(+un.dataset.unfollow);
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "start") startService();
+  else if (act === "save-token") saveXToken();
+  else if (act === "remove-token") saveXToken(true);
+  else if (act === "adding") {
+    fol.adding = !(fol.adding ?? !fol.info.follows.length);
+    renderFollowPanel();
+    if (fol.adding) $("follow-handle")?.focus({ preventScroll: true });
+  }
+});
+$("follow").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (e.target.id === "follow-add") followAccount(e.target);
+});
+$("follow").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "x-token") { e.preventDefault(); saveXToken(); }
+});
 
 /* ---------- accounts ---------- */
 const accts = { list: [], providers: [], open: new Set(), busy: new Set() };
@@ -1000,10 +1312,16 @@ $("refresh").addEventListener("click", refreshTopic);
 let findTimer;
 $("find-q").addEventListener("input", (e) => {
   clearTimeout(findTimer);
-  findTimer = setTimeout(() => { state.findQuery = e.target.value.trim().toLowerCase(); applyFilters(); }, 200);
+  findTimer = setTimeout(() => {
+    state.findQuery = e.target.value.trim().toLowerCase();
+    state.view === "following" ? loadFollowPosts() : applyFilters();
+  }, state.view === "following" ? 300 : 200);
 });
 $("find-q").addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.preventDefault(); e.target.value = ""; state.findQuery = ""; applyFilters(); }
+  if (e.key === "Escape" && e.target.value) {
+    e.stopPropagation(); e.preventDefault(); e.target.value = ""; state.findQuery = "";
+    state.view === "following" ? loadFollowPosts() : applyFilters();
+  }
 });
 
 /* Rename a topic in place. Enter saves, Esc or leaving the field cancels. */
@@ -1036,6 +1354,7 @@ function editTopic(li, t) {
 }
 $("more-btn").addEventListener("click", () => loadMore());
 $("nav-favs").addEventListener("click", () => openFavorites());
+$("nav-following").addEventListener("click", () => openFollowing());
 
 $("topics").addEventListener("click", async (e) => {
   const edit = e.target.closest("[data-edit]");
@@ -1188,3 +1507,5 @@ for (const x of $("sort").children) x.setAttribute("aria-pressed", String(x.data
 if (parseHash(location.hash).view === "home") goHome(false);
 addEventListener("popstate", () => { closeViewer(); route(); });
 Promise.all([loadTopics(), loadFavorites(), loadSources(), loadStorage()]).catch((e) => toast(e.message)).finally(route);
+if (parseHash(location.hash).view !== "following")
+  api("/api/following").then((i) => { fol.info = i; $("follow-count").textContent = i.follows.length || ""; }).catch(() => {});

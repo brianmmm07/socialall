@@ -9,6 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -17,8 +18,9 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, export
+from . import config, export, feeds
 from .accounts import accounts_router
+from .following import Refresher, following_router
 from .aggregator import collect
 from .connectors import DemoConnector, active_connectors, all_connectors, provider_for
 from .models import Favorite, PlatformStatus, Post, SearchResult
@@ -27,6 +29,9 @@ from .video_cache import CacheError, VideoCache, favorite_stems
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
+# Image hosts that refuse to show their pictures on other sites, so the app fetches them itself.
+PROXY_HOSTS = ("cdninstagram.com", "fbcdn.net", "xhscdn.com", "xhscdn.net")
+PROXY_MAX_BYTES = 15_000_000
 
 
 class TopicIn(BaseModel):
@@ -100,7 +105,9 @@ def create_app(
             log.info("video cache: removed %d leftover files (%d bytes)", freed["files"], freed["bytes"])
         for fav in state["store"].list_favorites(status="pending"):
             start_download(fav["post"])
+        background = asyncio.create_task(refresher.forever())
         yield
+        background.cancel()
         for task in list(state["tasks"]):
             task.cancel()
         if client is None:
@@ -123,6 +130,9 @@ def create_app(
             cache.clear()
 
     app.include_router(accounts_router(lambda: state["client"], credentials_changed))
+    refresher = Refresher(lambda: state["store"], lambda: state["client"],
+                          config.int_env("SOCIALALL_FEED_MINUTES", 15))
+    app.include_router(following_router(lambda: state["store"], lambda: state["client"], refresher, feeds.Service()))
 
     def timeout() -> float:
         return float(config.int_env("SOCIALALL_PLATFORM_TIMEOUT", 15))
@@ -246,6 +256,23 @@ def create_app(
             raise HTTPException(404, "Topic not found")
         return state["store"].get_posts(topic_id, platform, limit, offset, sort)
 
+    @app.get("/api/media", include_in_schema=False)
+    async def media(u: str = Query(..., max_length=4000)):
+        """Fetch a picture from a host that blocks other sites from showing it (Instagram, Xiaohongshu)."""
+        parts = urlsplit(u)
+        host = (parts.hostname or "").lower()
+        if parts.scheme != "https" or parts.port or not any(host == h or host.endswith("." + h) for h in PROXY_HOSTS):
+            raise HTTPException(400, "Not an image host SocialAll fetches")
+        try:
+            r = await state["client"].get(u, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"},
+                                          timeout=20, follow_redirects=False)
+        except httpx.HTTPError:
+            raise HTTPException(502, "Couldn't fetch the image") from None
+        kind = r.headers.get("content-type", "").split(";")[0].strip().lower()
+        if r.status_code != 200 or not kind.startswith("image/") or kind == "image/svg+xml" or len(r.content) > PROXY_MAX_BYTES:
+            raise HTTPException(502, "The image host didn't send an image")
+        return Response(r.content, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
+
     @app.get("/api/favorites", response_model=list[Favorite])
     def list_favorites():
         return [to_favorite(f) for f in state["store"].list_favorites()]
@@ -272,7 +299,7 @@ def create_app(
         store = state["store"]
         if existing := store.get_favorite(item.platform, item.id):
             return to_favorite(existing)
-        post = store.seen_post(item.platform, item.id)
+        post = store.seen_post(item.platform, item.id) or store.feed_post(item.platform, item.id)
         if not post:
             raise HTTPException(404, "Post not found. Search for it again, then favourite it.")
         cacheable = post.media_type == "video" and bool(post.video_url)
