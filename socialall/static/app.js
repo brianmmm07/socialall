@@ -195,9 +195,40 @@ function markNav() {
 }
 
 /* ---------- views ---------- */
-async function runSearch(q, fresh = false) {
+/* ---------- deep links: #q=term, #topic=id, #favorites ---------- */
+function parseHash(h) {
+  const m = /^#(q|topic)=(.+)$/.exec(h);
+  if (h === "#favorites") return { view: "favorites" };
+  if (m?.[1] === "topic" && /^\d+$/.test(m[2])) return { view: "topic", id: +m[2] };
+  if (m?.[1] === "q") { try { const q = decodeURIComponent(m[2]).trim(); if (q) return { view: "search", q }; } catch {} }
+  return { view: "home" };
+}
+
+/* nav: "push" adds a history entry, "replace" swaps the current one, false leaves the URL. */
+function setHash(h, nav) {
+  if (!nav || location.hash === h || (!h && !location.hash)) return;
+  const url = h || location.pathname + location.search;
+  nav === "replace" ? history.replaceState(null, "", url) : history.pushState(null, "", url);
+}
+
+async function route() {
+  const r = parseHash(location.hash);
+  if (r.view === "search") return runSearch(r.q, false, false);
+  if (r.view === "favorites") return openFavorites(false);
+  if (r.view === "topic") {
+    const topics = state.topicList || (await loadTopics());
+    const t = topics.find((x) => x.id === r.id);
+    if (t) return openTopic(t, false);
+    toast("That topic no longer exists");
+    return goHome("replace");
+  }
+  goHome(false);
+}
+
+async function runSearch(q, fresh = false, nav = "push") {
   q = q.trim();
   if (!q) return;
+  setHash(`#q=${encodeURIComponent(q)}`, nav);
   state.searchAbort?.abort();
   const ctrl = (state.searchAbort = new AbortController());
   Object.assign(state, { view: "search", query: q, topic: null, offset: 0, hasMore: false, newKeys: new Set() });
@@ -226,8 +257,9 @@ function summary(posts) {
   return `${posts.length} post${posts.length === 1 ? "" : "s"} from ${n} platform${n === 1 ? "" : "s"}`;
 }
 
-async function openTopic(t) {
+async function openTopic(t, nav = "push") {
   state.searchAbort?.abort();
+  setHash(`#topic=${t.id}`, nav);
   Object.assign(state, { view: "topic", topic: t, query: t.name, offset: 0, newKeys: new Set() });
   $("q").value = t.name;
   $("save").disabled = true;
@@ -235,7 +267,13 @@ async function openTopic(t) {
   setHeader(t.name, "Loading saved posts…", true);
   showErrors();
   skeleton();
-  const posts = await api(postsUrl(t.id));
+  let posts;
+  try {
+    posts = await api(postsUrl(t.id));
+  } catch (e) {
+    toast(`Couldn't open topic: ${e.message}`);
+    return goHome("replace");
+  }
   if (state.view !== "topic" || state.topic.id !== t.id) return;
   if (!posts.length) return refreshTopic();
   state.posts = posts;
@@ -299,7 +337,7 @@ async function refreshTopic() {
   btn.classList.add("is-busy");
   btn.disabled = true;
   try {
-    if (state.view === "search") return await runSearch(state.query, true);
+    if (state.view === "search") return await runSearch(state.query, true, false);
     const t = state.topic;
     const first = !state.posts.length;
     if (first) skeleton();
@@ -324,8 +362,9 @@ async function refreshTopic() {
   }
 }
 
-async function openFavorites() {
+async function openFavorites(nav = "push") {
   state.searchAbort?.abort();
+  setHash("#favorites", nav);
   if (state.view !== "favorites") { state.findQuery = ""; $("find-q").value = ""; }
   Object.assign(state, { view: "favorites", topic: null, hasMore: false, newKeys: new Set() });
   $("save").disabled = true;
@@ -588,9 +627,10 @@ $("save").addEventListener("click", async () => {
     if (state.view === "search" && state.query.toLowerCase() === name.toLowerCase() && state.posts.length) {
       await api(`/api/topics/${t.id}/refresh`, { method: "POST" });
       const topics = await loadTopics();
-      return openTopic(topics.find((x) => x.id === t.id) || t);
+      // Replace, so Back doesn't re-run the search that was just saved.
+      return openTopic(topics.find((x) => x.id === t.id) || t, "replace");
     }
-    openTopic(t);
+    openTopic(t, "replace");
   } catch (e) { toast(e.message); }
 });
 $("refresh").addEventListener("click", refreshTopic);
@@ -633,7 +673,7 @@ function editTopic(li, t) {
   });
 }
 $("more-btn").addEventListener("click", () => loadMore());
-$("nav-favs").addEventListener("click", openFavorites);
+$("nav-favs").addEventListener("click", () => openFavorites());
 
 $("topics").addEventListener("click", async (e) => {
   const edit = e.target.closest("[data-edit]");
@@ -642,7 +682,7 @@ $("topics").addEventListener("click", async (e) => {
   if (del) {
     const id = +del.dataset.del;
     await api(`/api/topics/${id}`, { method: "DELETE" });
-    if (state.view === "topic" && state.topic?.id === id) goHome();
+    if (state.view === "topic" && state.topic?.id === id) goHome("replace");
     return loadTopics();
   }
   const b = e.target.closest(".topic-btn");
@@ -709,7 +749,24 @@ viewer.addEventListener("close", () => {
   tileAt(last)?.scrollIntoView({ block: "nearest" });
 });
 
+/* ---------- shortcut sheet + phone library panel ---------- */
+const keys = $("keys");
+let keysOpener = null;
+function openKeys() {
+  if (keys.open || viewer.open) return;
+  keysOpener = document.activeElement;
+  keys.showModal();
+}
+keys.addEventListener("close", () => keysOpener?.focus?.({ preventScroll: true }));
+keys.addEventListener("click", (e) => { if (e.target === keys || e.target.closest("[data-close]")) keys.close(); });
+$("open-keys").addEventListener("click", openKeys);
+$("library").addEventListener("click", () => {
+  const open = $("rail").classList.toggle("is-open");
+  $("library").setAttribute("aria-expanded", String(open));
+});
+
 document.addEventListener("keydown", (e) => {
+  if (keys.open) return; // the dialog's own Esc closes it
   if (viewer.open) {
     const p = state.posts[state.viewerIndex];
     if (e.target.tagName === "VIDEO" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
@@ -727,6 +784,7 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
+  else if (e.key === "?") { e.preventDefault(); openKeys(); }
   else if (e.key === "j" || e.key === "k") { focusTile(e.key === "j" ? 1 : -1); e.preventDefault(); }
   else if (e.key === "f") {
     const tile = document.activeElement?.closest?.("#feed .tile");
@@ -751,7 +809,11 @@ function focusTile(dir) {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(); });
 
-function goHome() {
+function goHome(nav = "push") {
+  state.searchAbort?.abort();
+  setHash("", nav);
+  $("q").value = "";
+  $("save").disabled = true;
   Object.assign(state, { view: "home", posts: [], topic: null, query: "" });
   setHeader("Find what people are posting", "One search pulls posts from X, Instagram, Xiaohongshu, TikTok and LinkedIn.");
   markNav();
@@ -760,5 +822,6 @@ function goHome() {
 
 /* ---------- boot ---------- */
 for (const x of $("sort").children) x.setAttribute("aria-pressed", String(x.dataset.sort === state.sort));
-goHome();
-Promise.all([loadTopics(), loadFavorites(), loadSources(), loadStorage()]).catch((e) => toast(e.message));
+if (parseHash(location.hash).view === "home") goHome(false);
+addEventListener("popstate", () => { closeViewer(); route(); });
+Promise.all([loadTopics(), loadFavorites(), loadSources(), loadStorage()]).catch((e) => toast(e.message)).finally(route);

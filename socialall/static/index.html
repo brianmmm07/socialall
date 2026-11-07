@@ -47,18 +47,22 @@
 </header>
 
 <div class="shell">
-  <nav class="rail" aria-label="Library">
+  <nav class="rail" id="rail" aria-label="Library">
     <button class="nav-item" id="nav-favs" type="button">
       <svg class="icon" aria-hidden="true"><use href="#i-star"/></svg>
       <span>Favourites</span><span class="count" id="fav-count">0</span>
     </button>
+    <button class="nav-item library" id="library" type="button" aria-expanded="false" aria-controls="rail-foot">
+      <svg class="icon" aria-hidden="true"><use href="#i-disk"/></svg><span>Library</span>
+    </button>
     <h2 class="rail-heading">Topics</h2>
     <ul class="topics" id="topics"></ul>
     <p class="rail-empty" id="topics-empty">Saved topics appear here. Search something, then press Save topic.</p>
-    <div class="rail-foot">
+    <div class="rail-foot" id="rail-foot">
       <h2 class="rail-heading">Sources</h2>
       <ul class="sources" id="sources"></ul>
       <p class="storage" id="storage"></p>
+      <p class="export"><button class="linkish" type="button" id="open-keys">Keyboard shortcuts</button> <kbd>?</kbd></p>
       <p class="export">Export favourites: <a href="/api/favorites/export?format=md" download>Markdown</a> · <a href="/api/favorites/export?format=json" download>JSON</a></p>
     </div>
   </nav>
@@ -109,6 +113,28 @@
   <button class="icon-btn step next" type="button" id="post-next" aria-label="Next post" title="Next post (↓)">
     <svg class="icon" aria-hidden="true"><use href="#i-right"/></svg>
   </button>
+</dialog>
+
+<dialog class="keys" id="keys" aria-labelledby="keys-title">
+  <div class="keys-head">
+    <h2 id="keys-title">Keyboard shortcuts</h2>
+    <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </div>
+  <h3>Feed</h3>
+  <dl>
+    <div><dt><kbd>/</kbd></dt><dd>Search</dd></div>
+    <div><dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next / previous post</dd></div>
+    <div><dt><kbd>Enter</kbd></dt><dd>Open the focused post</dd></div>
+    <div><dt><kbd>f</kbd></dt><dd>Star the focused post</dd></div>
+    <div><dt><kbd>?</kbd></dt><dd>Show this list</dd></div>
+  </dl>
+  <h3>Viewer</h3>
+  <dl>
+    <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous / next image, then post</dd></div>
+    <div><dt><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>k</kbd> <kbd>j</kbd></dt><dd>Previous / next post</dd></div>
+    <div><dt><kbd>f</kbd></dt><dd>Star</dd></div>
+    <div><dt><kbd>Esc</kbd></dt><dd>Close</dd></div>
+  </dl>
 </dialog>
 
 <div class="toast" id="toast" role="alert" hidden></div>

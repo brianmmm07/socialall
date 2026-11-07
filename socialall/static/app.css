@@ -146,6 +146,29 @@ h1, h2, p { margin: 0; }
 .export { font-size: 12px; color: var(--text-3); padding: 4px 10px 0; }
 .export a { color: var(--text-2); }
 .export a:hover { color: var(--text); }
+.linkish { border: 0; padding: 0; background: none; font: inherit; color: var(--text-2); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.linkish:hover { color: var(--text); }
+.export kbd, .keys kbd {
+  display: inline-block; min-width: 20px; padding: 1px 6px; text-align: center;
+  font: 500 12px/1.5 var(--font); color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 5px;
+}
+.library { display: none !important; }
+.keys {
+  width: min(440px, calc(100vw - 32px)); padding: 20px 24px 24px; border: 0; border-radius: var(--r-lg);
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-lift);
+}
+.keys::backdrop { background: oklch(0.27 0.02 55 / 0.25); }
+.keys[open] { animation: rise 200ms var(--ease); }
+@keyframes rise { from { opacity: 0; translate: 0 6px; } }
+.keys-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.keys h2 { font-size: 17px; font-weight: 600; }
+.keys .icon-btn { position: static; translate: 8px 0; }
+.keys h3 { font-size: 12px; font-weight: 600; color: var(--text-3); margin: 16px 0 8px; }
+.keys dl { display: grid; gap: 8px; margin: 0; }
+.keys dl div { display: flex; align-items: baseline; gap: 12px; font-size: 14px; }
+.keys dt { width: 128px; flex: none; color: var(--text-3); font-size: 12px; }
+.keys dd { margin: 0; color: var(--text-2); }
 .storage { font-size: 12px; color: var(--text-3); padding: 12px 10px 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--text-3)); flex: none; }
@@ -334,7 +357,10 @@ h1, h2, p { margin: 0; }
   .rail-heading, .rail-empty, .rail-foot { display: none; }
   .topics { display: flex; gap: 6px; overflow-x: auto; flex: 1; }
   .topic-btn { width: auto; white-space: nowrap; }
-  .topic-del { display: none; }
+  .topic-del, .topic-edit { display: none; }
+  .library { display: flex !important; min-height: 44px; margin-left: auto; width: auto !important; }
+  .rail.is-open .rail-foot, .rail.is-open .rail-foot .rail-heading { display: block; }
+  .rail.is-open .rail-foot { flex-basis: 100%; padding-bottom: 8px; }
   .main { padding: 20px 16px 48px; }
   .viewer { grid-template-columns: 1fr; grid-template-rows: minmax(0, 62dvh) 1fr; }
   .stage video, .stage img { max-height: 62dvh; }
