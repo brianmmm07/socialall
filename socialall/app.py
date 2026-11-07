@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from . import config, export, feeds
 from .accounts import accounts_router
+from .foryou import ForYou
 from .aggregator import collect
 from .following import Refresher, following_router
 from .connectors import DemoConnector, active_connectors, all_connectors, provider_for
@@ -108,6 +109,7 @@ def create_app(
     store: Store | None = None,
     client: httpx.AsyncClient | None = None,
     cache_dir: str | None = None,
+    foryou: ForYou | None = None,
 ) -> FastAPI:
     config.load_dotenv()
     state: dict = {"tasks": set()}
@@ -128,7 +130,8 @@ def create_app(
             log.info("video cache: removed %d leftover files (%d bytes)", freed["files"], freed["bytes"])
         for fav in state["store"].list_favorites(status="pending"):
             start_download(fav["post"])
-        background = [asyncio.create_task(refresher.forever()), asyncio.create_task(topics_forever())]
+        background = [asyncio.create_task(refresher.forever()), asyncio.create_task(topics_forever()),
+                      asyncio.create_task(mine.forever())]
         yield
         for task in background:
             task.cancel()
@@ -156,7 +159,10 @@ def create_app(
     app.include_router(accounts_router(lambda: state["client"], credentials_changed))
     refresher = Refresher(lambda: state["store"], lambda: state["client"],
                           config.int_env("SOCIALALL_FEED_MINUTES", 15))
-    app.include_router(following_router(lambda: state["store"], lambda: state["client"], refresher, feeds.Service()))
+    mine = foryou or ForYou(lambda: state["store"], hours=config.int_env("SOCIALALL_FORYOU_HOURS", 2))
+    app.state.foryou = mine
+    app.include_router(following_router(lambda: state["store"], lambda: state["client"], refresher,
+                                        feeds.Service(), mine))
 
     def timeout() -> float:
         return float(config.int_env("SOCIALALL_PLATFORM_TIMEOUT", 15))

@@ -1,6 +1,6 @@
 import pytest
 
-from socialall import credentials
+from socialall import credentials, foryou
 
 ENV_KEYS = [
     "X_BEARER_TOKEN", "INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID", "TIKTOK_CLIENT_KEY",
@@ -17,6 +17,11 @@ def clean_env(monkeypatch, tmp_path):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("SOCIALALL_FEED_MINUTES", "0")  # no background feed refresh during tests
     monkeypatch.setenv("SOCIALALL_TOPIC_REFRESHES_PER_DAY", "0")
+    monkeypatch.setenv("SOCIALALL_FORYOU_HOURS", "0")
+    # The sign-in browser counts as not downloaded, so no test starts a real one by accident.
+    async def not_installed(self):
+        return False
+    monkeypatch.setattr(foryou.Chromium, "installed", not_installed)
     # Never touch the real keychain or config folder from tests.
     store = credentials.CredentialStore(tmp_path / "config", backend=None)
     credentials.use_store(store)

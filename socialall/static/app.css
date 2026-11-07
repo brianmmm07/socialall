@@ -508,3 +508,29 @@ h1, h2, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
+
+/* Your own For you feeds */
+.fy-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.fy-list li { display: grid; grid-template-columns: auto 96px minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; min-height: 48px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.fy-list li:first-child { border-top: 0; }
+.fy-list a { color: var(--text); font-weight: 600; text-decoration: none; }
+.fy-list a:hover { text-decoration: underline; }
+.fy-status { color: var(--text-2); min-width: 0; }
+.fy-status > span { display: inline-flex; align-items: flex-start; gap: 7px; }
+.fy-status .icon { flex: none; width: 15px; height: 15px; margin-top: 2px; }
+.fy-bad { color: oklch(0.42 0.13 30); }
+.fy-bad .icon { color: var(--danger); }
+.fy-step .icon { color: var(--accent); animation: spin 900ms linear infinite; }
+.fy-acts { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.fy-acts .linkish { font-size: 13px; }
+.fy-how summary { cursor: pointer; font-size: 13px; color: var(--text-2); width: fit-content; }
+.fy-how summary:hover { color: var(--text); }
+.fy-how .note { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; max-width: 72ch; }
+.fy-how .note .icon { flex: none; width: 15px; height: 15px; margin-top: 2px; color: var(--text-3); }
+.watch-out { position: relative; display: grid; place-items: center; max-height: 100%; }
+.watch-out img { display: block; }
+.watch-out .btn { position: absolute; box-shadow: var(--shadow-lift); }
+@media (max-width: 560px) {
+  .fy-list li { grid-template-columns: auto minmax(0, 1fr); padding: 10px 0; }
+  .fy-status, .fy-acts { grid-column: 2; justify-content: flex-start; }
+}

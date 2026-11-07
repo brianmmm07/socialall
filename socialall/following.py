@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from . import credentials, feeds
+from . import credentials, feeds, foryou
 from .accounts import AccountValues, _field_status, same_origin
 from .models import Post
 from .storage import Store
@@ -72,7 +72,8 @@ class Refresher:
 
     async def refresh(self) -> dict:
         async with self._lock:
-            follows = self.store().list_follows()
+            # Your own For you feeds are read by SocialAll's browser, on their own schedule.
+            follows = [f for f in self.store().list_follows() if f.get("kind") != foryou.KIND]
             if not follows:
                 return {"new": 0, "new_keys": [], "errors": {}, "offline": False}
             if not await feeds.healthy(self.client()):
@@ -106,7 +107,7 @@ class Refresher:
 
 
 def following_router(store: Callable[[], Store], client: Callable[[], httpx.AsyncClient],
-                     refresher: Refresher, service: feeds.Service) -> APIRouter:
+                     refresher: Refresher, service: feeds.Service, mine: foryou.ForYou) -> APIRouter:
     router = APIRouter(prefix="/api/following", tags=["following"])
 
     def x_token() -> dict:
@@ -132,6 +133,7 @@ def following_router(store: Callable[[], Store], client: Callable[[], httpx.Asyn
             "refreshing": refresher.running,
             "every_minutes": refresher.minutes,
             "docs_url": feeds.DOCS_URL,
+            "foryou": await mine.status(),
         }
 
     @router.get("")
@@ -166,7 +168,8 @@ def following_router(store: Callable[[], Store], client: Callable[[], httpx.Asyn
     @router.post("/refresh")
     async def refresh(request: Request):
         same_origin(request)
-        return await refresher.refresh()
+        reading = mine.refresh_stale()  # in the background; the page checks on it
+        return {**(await refresher.refresh()), "foryou_reading": reading}
 
     @router.get("/posts", response_model=list[Post])
     def posts(
@@ -187,6 +190,53 @@ def following_router(store: Callable[[], Store], client: Callable[[], httpx.Asyn
         service.start(client())
         await asyncio.sleep(0.05)  # let it report its first step
         return await service.status(client())
+
+    # ----- your own For you feeds, read by SocialAll's browser -----
+    def platform_of(name: str) -> str:
+        if name not in foryou.PLATFORMS:
+            raise HTTPException(404, "SocialAll reads For you feeds from Instagram, TikTok and Xiaohongshu")
+        return name
+
+    @router.get("/foryou")
+    async def foryou_status():
+        return await mine.status()
+
+    @router.post("/foryou/{platform}/sign-in")
+    async def foryou_sign_in(platform: str, request: Request):
+        same_origin(request)
+        try:
+            mine.start_sign_in(platform_of(platform))
+        except foryou.Busy as e:
+            raise HTTPException(409, str(e)) from None
+        await asyncio.sleep(0.05)  # let it report its first step
+        return await mine.status()
+
+    @router.post("/foryou/close")
+    async def foryou_close(request: Request):
+        same_origin(request)
+        mine.close_window()
+        await asyncio.sleep(0.05)
+        return await mine.status()
+
+    @router.post("/foryou/{platform}/read")
+    async def foryou_read(platform: str, request: Request):
+        same_origin(request)
+        try:
+            mine.start_read(platform_of(platform))
+        except LookupError as e:
+            raise HTTPException(404, str(e)) from None
+        except foryou.TooSoon as e:
+            raise HTTPException(429, str(e)) from None
+        except foryou.Busy as e:
+            raise HTTPException(409, str(e)) from None
+        await asyncio.sleep(0.05)
+        return await mine.status()
+
+    @router.delete("/foryou/{platform}")
+    async def foryou_sign_out(platform: str, request: Request):
+        same_origin(request)
+        await mine.sign_out(platform_of(platform))
+        return await mine.status()
 
     @router.put("/settings")
     async def save_settings(body: AccountValues, request: Request):

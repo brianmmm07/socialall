@@ -144,8 +144,13 @@ function emptyHtml() {
   if (state.view === "following") {
     const i = fol.info;
     if (state.findQuery) return `<div class="empty-state"><h2>No posts match</h2><p>Nothing from the accounts you follow mentions “${esc(state.findQuery)}”.</p></div>`;
-    if (!i?.follows.length) return `<div class="empty-state"><h2>Your stream is empty</h2><p>Follow a few accounts above. Their new posts land here, newest first, and SocialAll ${checksEvery(i)}.</p></div>`;
-    if (!i.service.running) return `<div class="empty-state"><h2>Waiting for the feed service</h2><p>Start it above, and posts from the accounts you follow appear here.</p></div>`;
+    if (!i?.follows.length) return `<div class="empty-state"><h2>Your stream is empty</h2><p>Follow a few accounts above, or sign in to your own For you feeds. New posts land here, newest first, and SocialAll ${checksEvery(i)}.</p></div>`;
+    if (!i.service.running && !i.follows.some(isForYou)) return `<div class="empty-state"><h2>Waiting for the feed service</h2><p>Start it above, and posts from the accounts you follow appear here.</p></div>`;
+    if (i.foryou?.busy) {
+      const b = i.foryou.busy;
+      const title = { sign_in: `Sign in to ${PLATFORMS[b.platform] || b.platform}`, setup: "Getting ready" }[b.what] || "Reading your feed";
+      return `<div class="empty-state"><h2>${esc(title)}</h2><p>${esc(b.step)}. Posts appear here when it's done.</p></div>`;
+    }
     return `<div class="empty-state"><h2>No posts yet</h2><p>Press Refresh to check the accounts you follow now.</p></div>`;
   }
   if (state.view === "favorites")
@@ -577,6 +582,11 @@ function renderStage() {
       stage.innerHTML = `<iframe src="${esc(p.embed_url)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen title="Video player"></iframe>`;
       return;
     }
+    if (pic(p.thumbnail_url) && safe(p.url)) {
+      stage.innerHTML = `<a class="watch-out" href="${esc(p.url)}" target="_blank" rel="noopener">
+          <img src="${esc(pic(p.thumbnail_url))}" alt=""><span class="btn">${icon("play")}<span>Watch on ${esc(PLATFORMS[p.platform] || p.platform)}</span></span></a>`;
+      return;
+    }
   }
   if (p.media_type === "image" && p.images.length) {
     const n = p.images.length;
@@ -664,8 +674,9 @@ async function loadStorage() {
 }
 
 /* ---------- following: accounts read through the free feed service (RSSHub) ---------- */
-const fol = { info: null, platform: stored("follow-platform", "instagram"), kind: "account", adding: null, busy: false, poll: null, loadSeq: 0 };
+const fol = { info: null, platform: stored("follow-platform", "instagram"), kind: "account", adding: null, busy: false, poll: null, fyPoll: null, loadSeq: 0 };
 const KIND_LABELS = { account: "Account", keyword: "Keyword", home: "For you" };
+const isForYou = (f) => f.kind === "foryou";  // your own feeds, read by SocialAll's browser rather than RSSHub
 
 async function openFollowing(nav = "push") {
   state.searchAbort?.abort();
@@ -696,6 +707,7 @@ async function loadFollowing() {
     followHeader();
   }
   if (fol.info.service.starting) startServicePoll();
+  if (fol.info.foryou?.busy) startForYouPoll();
   return fol.info;
 }
 
@@ -709,7 +721,7 @@ function followHeader() {
   const accounts = i.follows.filter((f) => f.kind === "account").length;
   const what = accounts === n ? `${n} account${n === 1 ? "" : "s"}` : `${n} feeds`;
   setHeader("Following", n ? `${what} · ${i.posts} post${i.posts === 1 ? "" : "s"} · ${checked}`
-    : "Follow accounts and see their new posts in one stream. Free, with no limit.", n > 0 && i.service.running);
+    : "Follow accounts and see their new posts in one stream. Free, with no limit.", n > 0 && (i.service.running || i.follows.some(isForYou)));
 }
 
 const followPostsUrl = (offset = 0) =>
@@ -748,8 +760,10 @@ async function loadMoreFollowing() {
 
 async function refreshFollowing(quiet = false) {
   const r = await api("/api/following/refresh", { method: "POST" });
-  if (r.offline) { if (!quiet) toast("The feed service isn't running. Start it above"); }
-  else if (!quiet) toast(r.new ? `${r.new} new post${r.new === 1 ? "" : "s"}` : "No new posts");
+  const reading = r.foryou_reading?.length ? `. Reading your ${r.foryou_reading.map((p) => PLATFORMS[p]).join(" and ")} For you feed${r.foryou_reading.length > 1 ? "s" : ""} too` : "";
+  if (r.offline) { if (!quiet) toast(`The feed service isn't running. Start it above${reading}`); }
+  else if (!quiet) toast((r.new ? `${r.new} new post${r.new === 1 ? "" : "s"}` : "No new posts") + reading);
+  if (reading) startForYouPoll();
   await loadFollowing();
   if (state.view !== "following") return;
   const first = !state.posts.length;
@@ -814,12 +828,13 @@ function renderFollowPanel() {
   const kind = kinds.find((k) => k.name === fol.kind);
   const hint = kind || plat;  // placeholder and help for what's being followed
   const xHelp = (plat.name === "x" && adding) || i.follows.some((f) => f.platform === "x" && f.error);
-  const errors = i.follows.filter((f) => f.error);
+  const rss = i.follows.filter((f) => !isForYou(f));
+  const errors = rss.filter((f) => f.error);
   $("follow").innerHTML = `
-    ${serviceHtml(i.service)}
-    ${i.follows.length ? `<div class="follow-bar">
-        <ul class="follow-list">${i.follows.map(followChip).join("")}</ul>
-        ${adding ? "" : `<button class="btn ghost sm" type="button" data-act="adding">${icon("plus")}<span>Follow another</span></button>`}
+    ${rss.length || adding ? serviceHtml(i.service) : ""}
+    ${rss.length || !adding ? `<div class="follow-bar">
+        ${rss.length ? `<ul class="follow-list">${rss.map(followChip).join("")}</ul>` : ""}
+        ${adding ? "" : `<button class="btn ghost sm" type="button" data-act="adding">${icon("plus")}<span>${rss.length ? "Follow another" : "Follow an account"}</span></button>`}
       </div>
       ${errors.length ? `<ul class="follow-errors">${errors.map((f) => `<li data-p="${esc(f.platform)}"><span class="dot"></span><b>${esc(f.label)}</b> ${esc(f.error)}</li>`).join("")}</ul>` : ""}` : ""}
     ${adding ? `<form class="follow-card follow-add" id="follow-add">
@@ -835,9 +850,97 @@ function renderFollowPanel() {
         </div>
         <p class="note">${esc(hint.help)}</p>
       </form>` : ""}
+    ${i.foryou ? forYouHtml(i.foryou) : ""}
     ${xHelp ? xTokenHtml(i) : ""}`;
   if ($("follow-handle")) $("follow-handle").value = typed;
   if ($("x-token")) $("x-token").value = token;
+}
+
+function forYouHtml(fy) {
+  const busy = fy.busy;
+  const on = fy.platforms.some((p) => p.on);
+  const every = fy.every_hours > 0 ? `It reads them about every ${fy.every_hours} hour${fy.every_hours === 1 ? "" : "s"} while it's open` : "It reads them when you press Read now";
+  const rows = fy.platforms.map((p) => {
+    const mine = busy?.platform === p.name ? busy : null;
+    const off = busy ? " disabled" : "";
+    const signIn = (label) => `<button class="btn sm" type="button" data-fy="sign-in" data-fyp="${esc(p.name)}"${off}>${label}</button>`;
+    const read = `<button class="btn ghost sm" type="button" data-fy="read" data-fyp="${esc(p.name)}"${off}>${icon("refresh")}<span>Read now</span></button>`;
+    const out = `<button class="linkish danger-link" type="button" data-fy="sign-out" data-fyp="${esc(p.name)}">Sign out</button>`;
+    let status, acts;
+    if (mine) {
+      status = `<span class="fy-step">${icon("refresh")}<span>${esc(mine.step)}</span></span>`;
+      acts = mine.what === "sign_in" ? `<button class="btn ghost sm" type="button" data-fy="close">Close window</button>` : "";
+    } else if (!p.on) {
+      status = p.note && p.note_bad ? `<span class="fy-bad">${icon("alert")}<span>${esc(p.note)}</span></span>` : `<span>Not signed in</span>`;
+      acts = signIn("Sign in");
+    } else if (p.error) {
+      status = `<span class="fy-bad">${icon("alert")}<span>${esc(p.error)}</span></span>`;
+      acts = (p.sign_in_again ? signIn("Sign in again") : read) + out;
+    } else {
+      status = `<span>Signed in · ${p.read_at ? `read ${ago(p.read_at)}` : "not read yet"} · ${p.posts} post${p.posts === 1 ? "" : "s"}</span>`;
+      acts = read + out;
+    }
+    return `<li data-p="${esc(p.name)}"><span class="dot"></span><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.label)}</a>
+      <span class="fy-status">${status}</span><span class="fy-acts">${acts}</span></li>`;
+  }).join("");
+  return `<div class="follow-card fy">
+      <div><h2>Your own For you feeds</h2>
+        <p class="lead">What Instagram, TikTok and Xiaohongshu recommend to you, in this stream. Sign in once in a window SocialAll opens on this Mac. ${every}.</p></div>
+      <ul class="fy-list">${rows}</ul>
+      <details class="fy-how"${on ? "" : " open"}><summary>How this stays safe</summary>
+        <p class="note">${icon("lock")}<span>You sign in on the platform's own page, so SocialAll never sees your password. The sign-in stays in SocialAll's own browser on this Mac, apart from your usual one. SocialAll only looks: it never likes, follows, comments or posts. Platforms don't allow automated reading, so now and then one may sign you out or ask you to prove you're a person, and the feed waits for you here.${fy.ready ? "" : " The first sign-in downloads a browser for SocialAll, about 150 MB."}</span></p>
+      </details>
+    </div>`;
+}
+
+async function forYouAct(what, platform) {
+  const label = PLATFORMS[platform] || platform;
+  if (what === "sign-out" && !confirm(`Sign out of ${label} in SocialAll? Its For you posts are removed from this stream.`)) return;
+  const call = {
+    "sign-in": [`/api/following/foryou/${platform}/sign-in`, "POST"],
+    read: [`/api/following/foryou/${platform}/read`, "POST"],
+    "sign-out": [`/api/following/foryou/${platform}`, "DELETE"],
+    close: ["/api/following/foryou/close", "POST"],
+  }[what];
+  try {
+    fol.info.foryou = await api(call[0], { method: call[1] });
+  } catch (e) { return toast(e.message); }
+  if (what === "sign-out") {
+    toast(`Signed out of ${label}`);
+    await loadFollowing();
+    return loadFollowPosts();
+  }
+  renderFollowPanel();
+  if (fol.info.foryou.busy) startForYouPoll();
+}
+
+/* While SocialAll's browser signs in or reads, check on it. When it's done, show what it found. */
+function startForYouPoll() {
+  if (fol.fyPoll) return;
+  fol.fyPoll = setInterval(async () => {
+    if (!fol.info) return;
+    let fy;
+    try { fy = await api("/api/following/foryou"); } catch { return; }
+    const was = fol.info.foryou?.busy;
+    fol.info.foryou = fy;
+    if (fy.busy) {
+      if (state.view === "following") renderFollowPanel();
+      if (!was || was.what !== fy.busy.what) renderFeed();  // the empty state says what's happening
+      return;
+    }
+    clearInterval(fol.fyPoll);
+    fol.fyPoll = null;
+    const note = was && fy.platforms.find((p) => p.name === was.platform)?.note;
+    if (note) toast(note);
+    await loadFollowing();
+    if (state.view !== "following") return;
+    const before = new Set(state.posts.map(keyOf));
+    await loadFollowPosts();
+    if (before.size) {
+      state.newKeys = new Set(state.posts.map(keyOf).filter((k) => !before.has(k)));
+      if (state.newKeys.size) renderFeed();
+    }
+  }, 2500);
 }
 
 async function followAccount(form) {
@@ -937,6 +1040,8 @@ $("follow").addEventListener("click", (e) => {
   }
   const un = e.target.closest("[data-unfollow]");
   if (un) return unfollow(+un.dataset.unfollow);
+  const fy = e.target.closest("[data-fy]");
+  if (fy) return forYouAct(fy.dataset.fy, fy.dataset.fyp);
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "start") startService();
   else if (act === "save-token") saveXToken();

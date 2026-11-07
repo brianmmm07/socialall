@@ -55,6 +55,12 @@ HINTS = {
 }
 # Besides accounts, X can follow a search and the signed-in account's own recommendations.
 KINDS = {p: ["account"] for p in PLATFORMS} | {"x": ["account", "keyword", "home"]}
+# Your own signed-in recommendations, read by SocialAll's browser (see foryou.py), not by RSSHub.
+FOR_YOU_URLS = {
+    "instagram": "https://www.instagram.com/",
+    "tiktok": "https://www.tiktok.com/foryou",
+    "xiaohongshu": "https://www.xiaohongshu.com/explore",
+}
 KIND_HINTS = {
     "keyword": ("A word, phrase or #hashtag", "Every new post on X that mentions it. Uses the spare account's token."),
     "home": ("", "The spare account's own For you feed. Follow accounts you like from that account and it learns what to show."),
@@ -185,6 +191,8 @@ def route(platform: str, handle: str, kind: str = "account") -> str:
 
 
 def profile_url(platform: str, handle: str, kind: str = "account") -> str:
+    if kind == "foryou":
+        return FOR_YOU_URLS[platform]
     if kind == "keyword":
         return f"https://x.com/search?q={quote(handle, safe='')}&f=live"
     if kind == "home":
@@ -203,6 +211,8 @@ def display(platform: str, handle: str, name: str | None = None, kind: str = "ac
         return f"“{handle}”"
     if kind == "home":
         return "For you (spare account)"
+    if kind == "foryou":
+        return f"Your {LABELS[platform]} For you"
     if platform in ("x", "instagram", "tiktok"):
         return f"@{handle}"
     return name or (handle if platform == "linkedin" else "Xiaohongshu account")
