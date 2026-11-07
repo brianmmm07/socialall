@@ -48,6 +48,7 @@ class PlatformStatus(BaseModel):
     configured: bool
     required_env: list[str]
     notes: str
+    via: str | None = None  # "apify" or "socialcrawl" when a one-key service searches this platform
 
 
 class SearchResult(BaseModel):

@@ -360,6 +360,21 @@ h1, h2, p { margin: 0; }
 .acct-intro { display: flex; gap: 8px; align-items: flex-start; color: var(--text-2); font-size: 14px; margin-bottom: 18px; }
 .acct-intro .icon { color: var(--text-3); margin-top: 2px; }
 .acct-list { display: grid; gap: 12px; }
+.acct.provider.featured { box-shadow: var(--shadow-lift); outline: 1.5px solid oklch(0.56 0.15 42 / 0.35); }
+.acct .tag.muted { background: var(--surface-2); color: var(--text-2); }
+.acct .tag { flex: none; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
+.acct-group { font-size: 12px; font-weight: 600; color: var(--text-3); margin: 14px 2px -2px; }
+.steps.big { font-size: 14px; gap: 6px; color: var(--text); }
+.steps a { color: var(--accent); }
+.fields.one { grid-template-columns: minmax(0, 460px); }
+.pick { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.pick legend { font-size: 13px; font-weight: 500; padding: 0 0 6px; }
+.pick label { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; cursor: pointer; background: var(--surface); }
+.pick label:has(input:checked) { border-color: oklch(0.56 0.15 42 / 0.45); background: var(--accent-soft); }
+.pick input { margin: 0; }
+.pick small { color: var(--text-3); font-size: 12px; }
+.note { font-size: 13px; color: var(--text-2); max-width: 64ch; }
+.note.fine { font-size: 12px; color: var(--text-3); }
 .acct { scroll-margin-top: 76px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-tile); transition: box-shadow 200ms var(--ease); }
 .acct.is-open { box-shadow: var(--shadow-lift); }
 .acct-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
@@ -410,6 +425,55 @@ h1, h2, p { margin: 0; }
   .acct-actions { width: 100%; padding-left: 22px; }
 }
 
+/* Following: accounts read through the free feed service */
+#nav-following[aria-current="page"] .icon { fill: none; }
+.follow { display: grid; gap: 12px; max-width: 980px; margin-bottom: 22px; }
+.follow-card, .xtoken { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-tile); padding: 16px 18px; display: grid; gap: 12px; }
+.follow-card h2 { font-size: 16px; font-weight: 600; }
+.follow-card .lead { font-size: 13px; color: var(--text-2); margin-top: 2px; max-width: 62ch; }
+.follow-card.svc { box-shadow: var(--shadow-lift); outline: 1.5px solid oklch(0.56 0.15 42 / 0.35); }
+.follow-card code { font: 500 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.svc-head { display: flex; gap: 12px; align-items: flex-start; }
+.svc-head .tag { flex: none; margin-top: 1px; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
+.svc-step { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.svc-step .icon { width: 15px; height: 15px; color: var(--accent); animation: spin 900ms linear infinite; }
+.add-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.add-head .linkish { font-size: 13px; }
+.plats { flex-wrap: wrap; justify-self: start; max-width: 100%; }
+.plats button { display: inline-flex; align-items: center; gap: 7px; }
+.kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.kinds button { height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 13px; cursor: pointer; }
+.kinds button:hover { color: var(--text); background: var(--surface-2); }
+.kinds button[aria-pressed="true"] { border-color: oklch(0.56 0.15 42 / 0.45); background: var(--accent-soft); color: var(--text); }
+.add-row { display: flex; gap: 8px; max-width: 560px; }
+.add-row input {
+  flex: 1; min-width: 0; height: 40px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.add-row input::placeholder { color: var(--text-3); }
+.add-row input:hover { border-color: var(--surface-3); }
+.add-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.add-row .btn { height: 40px; }
+.follow-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.follow-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.fchip { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 4px 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13px; }
+.fchip a { color: var(--text); text-decoration: none; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fchip a:hover { text-decoration: underline; }
+.fchip .n { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.fchip > .icon { width: 14px; height: 14px; color: var(--danger); }
+.fchip.is-bad { border-color: oklch(0.54 0.18 28 / 0.4); }
+.fchip button { display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 50%; background: none; color: var(--text-3); cursor: pointer; }
+.fchip button:hover { background: var(--surface-2); color: var(--danger); }
+.fchip button .icon { width: 13px; height: 13px; }
+.follow-errors { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; color: oklch(0.38 0.1 30); }
+.follow-errors li { display: flex; align-items: baseline; gap: 7px; }
+.follow-errors .dot { translate: 0 -1px; }
+.follow-errors b { color: var(--text); font-weight: 600; }
+.xtoken .note { display: flex; gap: 8px; align-items: flex-start; }
+.xtoken .note .icon { width: 15px; height: 15px; margin-top: 2px; color: var(--text-3); }
+.xtoken .field { max-width: 460px; }
+
 @media (max-width: 900px) {
   .wordmark { width: auto; }
   .shell { grid-template-columns: 1fr; }
@@ -438,7 +502,35 @@ h1, h2, p { margin: 0; }
   .feed { columns: 2 150px; column-gap: 10px; }
   .tile, .skel { margin-bottom: 10px; }
   .head h1 { font-size: 22px; }
+  .follow-list { flex-basis: 100%; }
+  .follow-card, .xtoken { padding: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}
+
+/* Your own For you feeds */
+.fy-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.fy-list li { display: grid; grid-template-columns: auto 96px minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; min-height: 48px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.fy-list li:first-child { border-top: 0; }
+.fy-list a { color: var(--text); font-weight: 600; text-decoration: none; }
+.fy-list a:hover { text-decoration: underline; }
+.fy-status { color: var(--text-2); min-width: 0; }
+.fy-status > span { display: inline-flex; align-items: flex-start; gap: 7px; }
+.fy-status .icon { flex: none; width: 15px; height: 15px; margin-top: 2px; }
+.fy-bad { color: oklch(0.42 0.13 30); }
+.fy-bad .icon { color: var(--danger); }
+.fy-step .icon { color: var(--accent); animation: spin 900ms linear infinite; }
+.fy-acts { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.fy-acts .linkish { font-size: 13px; }
+.fy-how summary { cursor: pointer; font-size: 13px; color: var(--text-2); width: fit-content; }
+.fy-how summary:hover { color: var(--text); }
+.fy-how .note { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; max-width: 72ch; }
+.fy-how .note .icon { flex: none; width: 15px; height: 15px; margin-top: 2px; color: var(--text-3); }
+.watch-out { position: relative; display: grid; place-items: center; max-height: 100%; }
+.watch-out img { display: block; }
+.watch-out .btn { position: absolute; box-shadow: var(--shadow-lift); }
+@media (max-width: 560px) {
+  .fy-list li { grid-template-columns: auto minmax(0, 1fr); padding: 10px 0; }
+  .fy-status, .fy-acts { grid-column: 2; justify-content: flex-start; }
 }

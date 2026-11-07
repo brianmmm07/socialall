@@ -16,14 +16,14 @@ class XConnector(Connector):
     label = "X"
     required_env = ["X_BEARER_TOKEN"]
     notes = (
-        "Official X API v2 recent search (last 7 days). Sign in with X, or paste your app's "
-        "Bearer token. Either way the app needs a plan that includes search (Basic or higher)."
+        "X's own API (recent search, last 7 days). X is pay-as-you-go: you buy credits at "
+        "console.x.com and each post read costs about $0.005. Without credits every search fails."
     )
     base_url = "https://api.x.com/2"
     authorize_endpoint = "https://x.com/i/oauth2/authorize"
-    docs_url = "https://developer.x.com/en/portal/dashboard"
+    docs_url = "https://console.x.com"
     fields = [
-        Field("X_BEARER_TOKEN", "Bearer token", help="Keys and tokens → Bearer Token, in your app on developer.x.com."),
+        Field("X_BEARER_TOKEN", "Bearer token", help="console.x.com → your app → Keys and tokens → Bearer Token."),
     ]
     oauth = OAuthSpec(
         app_fields=[
@@ -31,11 +31,12 @@ class XConnector(Connector):
             Field("X_CLIENT_SECRET", "Client Secret", required=False,
                   help="Only for a confidential client (Web App). Leave empty for a Native App."),
         ],
-        console_url="https://developer.x.com/en/portal/dashboard",
+        console_url="https://console.x.com",
         steps=[
-            "In your app on developer.x.com, open User authentication settings and turn on OAuth 2.0.",
-            "Add the callback URL below, exactly as shown.",
-            "Copy the OAuth 2.0 Client ID (and Client Secret, for a Web App) here, then sign in.",
+            "Sign in at console.x.com with your X account, accept the developer agreement and create an app.",
+            "Buy some credits in the console (Billing). X charges about $0.005 per post read; with none, searches fail.",
+            "In the app's user authentication settings, turn on OAuth 2.0, choose Native App, and add the callback URL below.",
+            "Copy the OAuth 2.0 Client ID here, then press Sign in.",
         ],
     )
 

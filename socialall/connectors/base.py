@@ -57,6 +57,7 @@ class Connector(ABC):
     fields: list[Field] = []
     docs_url: str = ""
     oauth: OAuthSpec | None = None
+    min_timeout: float = 0  # slow sources (scrapers) get at least this many seconds
 
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client

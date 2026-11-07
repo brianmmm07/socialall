@@ -13,6 +13,14 @@ UI, through a JSON API, or from the command line.
   with "Also on …" links.
 - **Links work:** the address bar tracks the view (`#q=coffee`, `#topic=3`,
   `#favorites`), so reload, Back and bookmarks land where you were.
+- **Follow accounts for free, with no limit.** Add X, Instagram, TikTok,
+  LinkedIn company and Xiaohongshu accounts under **Following**, and their new
+  posts land in one stream you can filter and search. It reads them through
+  [RSSHub](https://docs.rsshub.app), which runs on your Mac. See
+  [Following accounts](#following-accounts-free-no-limit).
+- **Your own For you feeds.** Sign in to Instagram, TikTok and Xiaohongshu once,
+  in a window SocialAll opens, and what they recommend to you joins the same
+  stream. See [Your own For you feeds](#your-own-for-you-feeds).
 - **Star posts** to keep them in Favourites. Videos of starred posts are
   downloaded to a local folder (`cache/videos/` by default) and play from there,
   so they still work offline or after the platform removes them. Find a
@@ -22,10 +30,11 @@ UI, through a JSON API, or from the command line.
 It runs with no API keys at all: until you connect a platform it shows sample
 ("demo") posts so you can try the app.
 
-- **Connect accounts in the app.** Open **Accounts** in the sidebar. X, Instagram
-  (through Meta) and LinkedIn have **Sign in** buttons; TikTok and Xiaohongshu
-  take their keys in a short form. Each platform shows whether it's connected and
-  as whom, and **Test** checks the keys with one cheap call.
+- **Connect in the app.** Open **Accounts** in the sidebar. The free way is one
+  [Apify](https://apify.com/) token: its free plan covers X, Instagram, TikTok and
+  LinkedIn with $5 of usage a month and no card. A paid
+  [SocialCrawl](https://www.socialcrawl.dev/) key also covers Xiaohongshu, and you
+  can still use each platform's own API.
 
 ## Quick start
 
@@ -60,6 +69,12 @@ API docs are at `http://127.0.0.1:8000/docs` once the server is running.
 | `GET /api/favorites/storage` | Cache folder location, file count and size |
 | `GET /api/favorites/export?format=md\|json` | Download your favourites |
 | `GET /cache/<file>` | Cached videos (supports seeking) |
+| `GET/POST /api/following`, `DELETE /api/following/{id}` | Followed accounts, the feed service's state, and following one (`{"platform", "handle"}`, a name or a profile link) |
+| `GET /api/following/posts?q=...&platform=x` | Posts from followed accounts, newest first |
+| `POST /api/following/refresh` | Read every followed account now |
+| `POST /api/following/service/start` | Start RSSHub in Docker |
+| `GET /api/following/foryou` | Your own For you feeds: signed in or not, last read, what's happening now |
+| `POST /api/following/foryou/{platform}/sign-in`, `/read`, `POST /api/following/foryou/close`, `DELETE /api/following/foryou/{platform}` | Open the sign-in window, read now, close the window, sign out (`instagram`, `tiktok`, `xiaohongshu`) |
 
 ## Mac app
 
@@ -93,9 +108,142 @@ favourites are kept but play online only.
   nothing jumps; videos are only created when you open one, and stopped when you
   close the viewer. Filters hide and show tiles without rebuilding the feed.
 
+## Following accounts (free, no limit)
+
+Searching a whole platform for free is capped (Apify's free plan is about 55
+searches a month). Following set accounts isn't: **Following** in the sidebar
+collects every new post from the accounts you add, checks for more every 15
+minutes (`SOCIALALL_FEED_MINUTES`, 0 turns it off), and lets you find anything
+in what it collected.
+
+It reads the accounts through [RSSHub](https://docs.rsshub.app), a free,
+open-source feed service that runs on your Mac in Docker:
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (free)
+   and open it once.
+2. Open **Following** and press **Start feed service**. The first start downloads
+   RSSHub, which takes a few minutes. After that it starts with Docker.
+3. Pick a platform and paste an account: `@name` or a profile link.
+
+| Platform | What you can follow | Login |
+| --- | --- | --- |
+| X | Any public account, a keyword or #hashtag (every new post that mentions it), and the spare account's own For you feed | A login token from a **spare** X account (below) |
+| Instagram | Public accounts | None |
+| TikTok | Any account | None |
+| LinkedIn | Company pages (`linkedin.com/company/…`), not people | None |
+| Xiaohongshu | Any account, by its profile link (`xiaohongshu.com/user/profile/…`) | None |
+
+X shows nothing to people who are signed out, so RSSHub needs the `auth_token`
+cookie of an X account: sign in to x.com in your browser, open Developer Tools →
+Application (Storage in Safari) → Cookies → x.com, and copy `auth_token` into the
+box on the Following page. Use a spare account, because X can lock accounts it
+thinks are automated. SocialAll keeps the token with your other keys and passes
+it to RSSHub when it starts it. Following that account's **For you** feed is a way
+to get recommendations without risking your main account: follow accounts you
+like from the spare account and X learns what to show it.
+
+The start button runs `docker run -d --name socialall-feeds -p 127.0.0.1:1200:1200
+diygod/rsshub:chromium-bundled` (the browser build, which LinkedIn and Xiaohongshu
+need), so RSSHub is only reachable from this Mac. If you already run RSSHub,
+set `RSSHUB_URL` to its address instead. Instagram and Xiaohongshu pictures are
+fetched by SocialAll itself (`/api/media`), because those sites refuse to show
+their images on other pages.
+
+The platforms don't allow reading their pages this way, and they may block you
+if you follow hundreds of accounts. Nothing here uses your own accounts.
+
+## Your own For you feeds
+
+Following shows accounts you chose. To also see what Instagram, TikTok and
+Xiaohongshu recommend to **you**, sign in to them inside SocialAll:
+
+1. Open **Following**. Under **Your own For you feeds**, press **Sign in** next to
+   a platform. The first time, SocialAll downloads its own browser (Playwright's
+   Chromium, about 150 MB). No Docker needed.
+2. A Chromium window opens on the platform's sign-in page. Sign in as usual,
+   including any code the platform texts you. The window closes by itself once
+   you're in, and SocialAll reads the feed straight away.
+3. After that it reads each feed about every 2 hours while SocialAll is open
+   (`SOCIALALL_FORYOU_HOURS`, 0 means only when you press **Read now**). Refresh
+   also reads any feed older than half an hour.
+
+How it works and what it never does:
+
+- You type your password into the platform's own page, so SocialAll never sees
+  it. The sign-in stays in a browser profile only SocialAll uses, in its settings
+  folder (`~/Library/Application Support/SocialAll/browser` on a Mac), apart from
+  your everyday browser. **Sign out** deletes that platform's cookies from it and
+  removes its posts.
+- To read, SocialAll opens that profile without a window, loads the For you page,
+  scrolls four or so times with pauses like a person's, and keeps the posts the
+  page itself received. It never likes, follows, comments or posts, skips ads,
+  and waits at least 10 minutes between two reads of the same feed.
+- If a platform signs you out or asks you to prove you're a person, that feed
+  stops trying and shows **Sign in again**. Knocking again while signed out is
+  what gets accounts flagged.
+
+This uses your real account, and platforms don't allow automated reading. The
+usual result is being asked to sign in again; rarely, a platform could limit
+the account. LinkedIn isn't offered (it restricts accounts quickly), and for X
+use the spare-account For you feed above.
+
+TikTok videos play in TikTok's own player. Xiaohongshu's feed doesn't include
+the video itself, so video notes show their cover and open on Xiaohongshu.
+Pictures from these feeds are links the platforms change after a while, so
+older posts can lose their pictures.
+
 ## Connecting accounts
 
 Open **Accounts** in the sidebar (or click a source under Sources).
+
+### Free: one Apify token
+
+[Apify](https://apify.com/) runs public-post scrapers. Its free plan gives $5 of
+usage every month with no card; when it's used up, runs are blocked until the
+next monthly cycle and nothing is billed. None of your social accounts are used.
+
+1. Make a free account at [console.apify.com](https://console.apify.com/sign-up).
+2. Open **Settings → API & Integrations** and copy your **Personal API token**.
+3. Paste it into the top card on the Accounts page and press **Save and test**.
+   The test only reads your usage ("$1.25 of $5.00 used this month").
+
+SocialAll asks each scraper for 10 posts, so a search across X, Instagram,
+TikTok and LinkedIn costs about $0.09, roughly 55 searches a month. Results take
+up to a minute, because a scraper runs for each platform. Xiaohongshu starts off,
+because its Apify scrapers need a paid plan. The default scrapers are
+`apidojo/twitter-scraper-lite`, `apify/instagram-hashtag-scraper`,
+`clockworks/tiktok-scraper` and `harvestapi/linkedin-post-search`; set
+`APIFY_ACTOR_<PLATFORM>` (for example `APIFY_ACTOR_X`) to use another. The
+`.env` names are `APIFY_TOKEN` and `APIFY_PLATFORMS`.
+
+Saved topics refresh by themselves, which is how posts from accounts you don't
+follow keep turning up: the topic that waited longest is searched again, at most
+once a day across all topics (`SOCIALALL_TOPIC_REFRESHES_PER_DAY`, 0 turns it
+off). That's about 30 of the free plan's roughly 55 searches a month. A topic you
+refresh by hand counts as that day's search.
+
+### Paid: SocialCrawl, one key for all five
+
+The platforms' own APIs are mostly closed to individuals: TikTok's is for
+approved academic researchers, LinkedIn's for approved companies and has no
+keyword search, Xiaohongshu has none, and X is prepaid. So SocialAll can search
+all five through [SocialCrawl](https://www.socialcrawl.dev/), a search service
+that needs no accounts on the platforms:
+
+1. Make a free account at socialcrawl.dev (100 credits, no card).
+2. In its dashboard, open **API Keys** and copy your key.
+3. Paste it into the top card on the Accounts page and press **Save and test**.
+   The test is a dry run and spends no credits.
+
+Searches cost credits: 1 for X, Instagram and TikTok, 5 for LinkedIn, and 5 per
+note on Xiaohongshu (SocialAll asks for 10), so about 58 for all five. Untick a
+platform in the card to skip it. Paid credits are about £15 for 2,500 and don't
+expire. A platform you connect with its own API (below) uses that instead.
+SocialCrawl collects public posts without the platforms' permission, and it sees
+what you search for. The `.env` names are `SOCIALCRAWL_API_KEY` and
+`SOCIALCRAWL_PLATFORMS` (comma separated).
+
+### Each platform's own API
 
 - **Sign in (OAuth)** for X, Instagram and LinkedIn. These platforms only let a
   *developer app* sign people in, so you create a free app on the platform's
@@ -143,7 +291,7 @@ missing keys is skipped, and if one platform fails the others still return.
 
 | Platform | How it gets content | What you need |
 | --- | --- | --- |
-| **X** | Official API v2 recent search (last 7 days) | Sign in with X, or `X_BEARER_TOKEN` from developer.x.com. Either way the app needs a plan that includes search (Basic or higher, paid) |
+| **X** | Official API v2 recent search (last 7 days) | An app at [console.x.com](https://console.x.com) with prepaid credits (about $0.005 per post read; the free and Basic plans are closed to new developers). Sign in with X, or `X_BEARER_TOKEN` |
 | **Instagram** | Official Graph API hashtag search. The topic becomes a hashtag ("machine learning" → `#machinelearning`) | A Meta app and an Instagram Business or Creator account linked to a Facebook Page. Sign in with Facebook finds the account for you; or set a long-lived `INSTAGRAM_ACCESS_TOKEN` with `instagram_basic` and `INSTAGRAM_USER_ID`. Limit: 30 unique hashtags per 7 days |
 | **TikTok** | Official Research API keyword query (last 30 days) | `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` from an **approved** Research API application. Access is mostly limited to academic researchers |
 | **LinkedIn** | Official Posts API. LinkedIn has no public keyword search, so it reads posts from the authors you list and keeps the ones that mention the topic | Sign in with LinkedIn (an app with the Community Management API, `r_organization_social`) or `LINKEDIN_ACCESS_TOKEN`, plus `LINKEDIN_AUTHOR_URNS`, e.g. `urn:li:organization:12345` |

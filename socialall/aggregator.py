@@ -77,11 +77,14 @@ async def collect(
     wanted = set(platforms) if platforms else None
     chosen = [c for c in connectors if wanted is None or c.name in wanted or c.name == "demo"]
 
+    def limit_for(c: Connector) -> float:
+        return max(timeout, getattr(c, "min_timeout", 0) or 0)
+
     async def run(c: Connector):
         try:
-            return await asyncio.wait_for(c.search(topic, limit_per_platform), timeout)
+            return await asyncio.wait_for(c.search(topic, limit_per_platform), limit_for(c))
         except asyncio.TimeoutError:
-            raise TimeoutError(f"Timed out after {timeout:g}s") from None
+            raise TimeoutError(f"Timed out after {limit_for(c):g}s") from None
 
     # A slow platform is cut off at `timeout` so it cannot hold up the rest.
     results = await asyncio.gather(*(run(c) for c in chosen), return_exceptions=True)
@@ -91,7 +94,7 @@ async def collect(
     for connector, result in zip(chosen, results):
         if isinstance(result, BaseException):
             log.warning("%s search failed: %r", connector.name, result)
-            errors[connector.name] = friendly_error(result, timeout)
+            errors[connector.name] = friendly_error(result, limit_for(connector))
             continue
         for post in result:
             if wanted is not None and post.platform not in wanted:

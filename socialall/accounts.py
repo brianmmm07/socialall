@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from . import credentials
-from .connectors import CONNECTORS, Connector, ConnectorError
+from .connectors import CONNECTORS, PROVIDERS, Connector, ConnectorError, provider_for
 from .connectors.base import Field
 
 TEST_TIMEOUT = 20
@@ -90,12 +90,17 @@ def describe(connector: Connector, request: Request) -> dict:
             "steps": spec.steps,
             "app_fields": app_fields,
         }
+    provider = None if configured else provider_for(connector.name)
+    via = provider.NAME if provider else None
     return {
         "name": connector.name,
         "label": connector.label,
         "notes": connector.notes,
         "docs_url": connector.docs_url,
-        "connected": configured,
+        "connected": configured or via is not None,
+        # "apify" or "socialcrawl" when a one-key service covers it and the platform's own keys aren't set.
+        "via": via,
+        "official": configured,
         # Where the working keys come from: the app (keychain), .env, or both.
         "source": ("app" if sources == {"app"} else "env" if sources == {"env"} else "mixed") if configured else None,
         "method": meta.get("method"),
@@ -104,6 +109,27 @@ def describe(connector: Connector, request: Request) -> dict:
         "test": {k: meta[k] for k in ("ok", "message", "at") if k in meta} or None,
         "fields": [_field_status(f) for f in connector.fields],
         "oauth": oauth,
+    }
+
+
+def describe_provider(provider) -> dict:
+    store = credentials.store()
+    meta = store.meta(provider.NAME)
+    enabled = provider.enabled_platforms()
+    labels = {cls.name: cls.label for cls in CONNECTORS}
+    return {
+        "name": provider.NAME,
+        "label": provider.LABEL,
+        "connected": bool(provider.api_key()),
+        "account": meta.get("account") if provider.api_key() else None,
+        "test": {k: meta[k] for k in ("ok", "message", "at") if k in meta} or None,
+        "fields": [_field_status(f) for f in provider.FIELDS],
+        "signup_url": provider.SIGNUP_URL,
+        "keys_url": provider.KEYS_URL,
+        "platforms": [
+            {"name": n, "label": labels[n], "enabled": n in enabled, "cost": provider.COSTS[n]}
+            for n in provider.ALL
+        ],
     }
 
 
@@ -166,8 +192,62 @@ def accounts_router(client: Callable[[], httpx.AsyncClient], on_change: Callable
     def list_accounts(request: Request):
         return {
             "store": credentials.store().label,
+            "providers": [describe_provider(p) for p in PROVIDERS],
             "platforms": [describe(cls(), request) for cls in CONNECTORS],
         }
+
+    # ---------- one-key services (Apify, SocialCrawl) ----------
+    providers = {p.NAME: p for p in PROVIDERS}
+
+    def provider(pname: str):
+        if pname not in providers:
+            raise HTTPException(404, "Unknown service")
+        return providers[pname]
+
+    @router.put("/provider/{pname}")
+    def save_provider(pname: str, body: AccountValues, request: Request):
+        same_origin(request)
+        pv = provider(pname)
+        allowed = {pv.KEY, pv.PLATFORMS_KEY}
+        if unknown := sorted(set(body.values) - allowed):
+            raise HTTPException(422, f"{pv.LABEL} doesn't use {', '.join(unknown)}")
+        values = {k: (v.strip() if isinstance(v, str) else None) for k, v in body.values.items()}
+        if pv.PLATFORMS_KEY in values:
+            picked = [p for p in (values[pv.PLATFORMS_KEY] or "").split(",") if p in pv.ALL]
+            # Keep the setting even when empty, so "none ticked" doesn't fall back to the defaults.
+            values[pv.PLATFORMS_KEY] = ",".join(picked) or ","
+        credentials.store().update(values)
+        if pv.KEY in values:
+            credentials.store().set_meta(pv.NAME, account=None, ok=None, message=None, at=None)
+        on_change()
+        return describe_provider(pv)
+
+    @router.post("/provider/{pname}/test")
+    async def test_provider(pname: str, request: Request):
+        same_origin(request)
+        pv = provider(pname)
+        store, now = credentials.store(), int(time.time())
+        if not pv.api_key():
+            result = {"ok": False, "message": f"Paste your {pv.LABEL} key first"}
+        else:
+            try:
+                account = await asyncio.wait_for(pv.verify(client()), TEST_TIMEOUT)
+                result = {"ok": True, "message": "Working", "account": account}
+            except Exception as e:  # any failure becomes a message on the card
+                own = isinstance(e, ConnectorError) and e.status in (401, 403)
+                result = {"ok": False, "message": str(e) if own else readable(e)}
+        store.set_meta(pv.NAME, ok=result["ok"], message=result["message"], at=now, account=result.get("account"))
+        on_change()
+        return {**result, "provider": describe_provider(pv)}
+
+    @router.delete("/provider/{pname}")
+    def disconnect_provider(pname: str, request: Request):
+        same_origin(request)
+        pv = provider(pname)
+        credentials.store().update({pv.KEY: None, pv.PLATFORMS_KEY: None})
+        credentials.store().clear_meta(pv.NAME)
+        on_change()
+        return describe_provider(pv)
 
     @router.put("/{name}")
     def save(name: str, body: AccountValues, request: Request):

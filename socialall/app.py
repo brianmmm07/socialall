@@ -7,8 +7,10 @@ import logging
 import sqlite3
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -17,16 +19,21 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, export
+from . import config, export, feeds
 from .accounts import accounts_router
+from .foryou import ForYou
 from .aggregator import collect
-from .connectors import DemoConnector, active_connectors, all_connectors
+from .following import Refresher, following_router
+from .connectors import DemoConnector, active_connectors, all_connectors, provider_for
 from .models import Favorite, PlatformStatus, Post, SearchResult
 from .storage import Store
 from .video_cache import CacheError, VideoCache, favorite_stems
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
+# Image hosts that refuse to show their pictures on other sites, so the app fetches them itself.
+PROXY_HOSTS = ("cdninstagram.com", "fbcdn.net", "xhscdn.com", "xhscdn.net")
+PROXY_MAX_BYTES = 15_000_000
 
 
 class TopicIn(BaseModel):
@@ -76,10 +83,33 @@ class SearchCache:
         self._items[key] = (time.monotonic(), result)
 
 
+async def auto_refresh_topic(store: Store, connectors: list, per_day: int, timeout: float,
+                             now: datetime | None = None) -> int | None:
+    """Refresh the saved topic that waited longest, at most `per_day` times a day across all topics.
+
+    Saved topics find posts from anyone, which is how new accounts turn up, but searches cost
+    Apify allowance. One a day is about 30 a month, inside the free plan's roughly 55.
+    Returns the id of the topic it refreshed, or None.
+    """
+    real = [c for c in connectors if c.name != "demo"]
+    topics = store.list_topics()
+    if per_day <= 0 or not real or not topics:
+        return None
+    now = now or datetime.now(timezone.utc)
+    done = [datetime.fromisoformat(t["refreshed_at"]) for t in topics if t.get("refreshed_at")]
+    if done and (now - max(done)).total_seconds() < 86400 / per_day:
+        return None  # a topic was refreshed recently, by hand or by this
+    topic = min(topics, key=lambda t: t.get("refreshed_at") or "")
+    result = await collect(topic["name"], real, 20, topic["platforms"], timeout)
+    store.save_posts(topic["id"], result.posts)  # marks it refreshed even when nothing came back
+    return topic["id"]
+
+
 def create_app(
     store: Store | None = None,
     client: httpx.AsyncClient | None = None,
     cache_dir: str | None = None,
+    foryou: ForYou | None = None,
 ) -> FastAPI:
     config.load_dotenv()
     state: dict = {"tasks": set()}
@@ -100,7 +130,11 @@ def create_app(
             log.info("video cache: removed %d leftover files (%d bytes)", freed["files"], freed["bytes"])
         for fav in state["store"].list_favorites(status="pending"):
             start_download(fav["post"])
+        background = [asyncio.create_task(refresher.forever()), asyncio.create_task(topics_forever()),
+                      asyncio.create_task(mine.forever())]
         yield
+        for task in background:
+            task.cancel()
         for task in list(state["tasks"]):
             task.cancel()
         if client is None:
@@ -123,9 +157,27 @@ def create_app(
             cache.clear()
 
     app.include_router(accounts_router(lambda: state["client"], credentials_changed))
+    refresher = Refresher(lambda: state["store"], lambda: state["client"],
+                          config.int_env("SOCIALALL_FEED_MINUTES", 15))
+    mine = foryou or ForYou(lambda: state["store"], hours=config.int_env("SOCIALALL_FORYOU_HOURS", 2))
+    app.state.foryou = mine
+    app.include_router(following_router(lambda: state["store"], lambda: state["client"], refresher,
+                                        feeds.Service(), mine))
 
     def timeout() -> float:
         return float(config.int_env("SOCIALALL_PLATFORM_TIMEOUT", 15))
+
+    async def topics_forever():
+        per_day = config.int_env("SOCIALALL_TOPIC_REFRESHES_PER_DAY", 1)
+        if per_day <= 0:
+            return
+        await asyncio.sleep(120)
+        while True:
+            try:
+                await auto_refresh_topic(state["store"], connectors(), per_day, timeout())
+            except Exception:
+                log.exception("automatic topic refresh failed")
+            await asyncio.sleep(30 * 60)  # check twice an hour; the gap between refreshes lives in the database
 
     def start_download(post: Post) -> None:
         async def run():
@@ -164,7 +216,11 @@ def create_app(
 
     @app.get("/api/platforms", response_model=list[PlatformStatus])
     def platforms():
-        statuses = [c.status() for c in all_connectors()]
+        statuses = []
+        for c in all_connectors():
+            provider = None if c.is_configured() else provider_for(c.name)
+            status = c.status()
+            statuses.append(status.model_copy(update={"configured": True, "via": provider.NAME}) if provider else status)
         if any(c.name == "demo" for c in connectors()):
             statuses.append(DemoConnector().status().model_copy(update={"configured": True}))
         return statuses
@@ -242,6 +298,23 @@ def create_app(
             raise HTTPException(404, "Topic not found")
         return state["store"].get_posts(topic_id, platform, limit, offset, sort)
 
+    @app.get("/api/media", include_in_schema=False)
+    async def media(u: str = Query(..., max_length=4000)):
+        """Fetch a picture from a host that blocks other sites from showing it (Instagram, Xiaohongshu)."""
+        parts = urlsplit(u)
+        host = (parts.hostname or "").lower()
+        if parts.scheme != "https" or parts.port or not any(host == h or host.endswith("." + h) for h in PROXY_HOSTS):
+            raise HTTPException(400, "Not an image host SocialAll fetches")
+        try:
+            r = await state["client"].get(u, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"},
+                                          timeout=20, follow_redirects=False)
+        except httpx.HTTPError:
+            raise HTTPException(502, "Couldn't fetch the image") from None
+        kind = r.headers.get("content-type", "").split(";")[0].strip().lower()
+        if r.status_code != 200 or not kind.startswith("image/") or kind == "image/svg+xml" or len(r.content) > PROXY_MAX_BYTES:
+            raise HTTPException(502, "The image host didn't send an image")
+        return Response(r.content, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
+
     @app.get("/api/favorites", response_model=list[Favorite])
     def list_favorites():
         return [to_favorite(f) for f in state["store"].list_favorites()]
@@ -268,7 +341,7 @@ def create_app(
         store = state["store"]
         if existing := store.get_favorite(item.platform, item.id):
             return to_favorite(existing)
-        post = store.seen_post(item.platform, item.id)
+        post = store.seen_post(item.platform, item.id) or store.feed_post(item.platform, item.id)
         if not post:
             raise HTTPException(404, "Post not found. Search for it again, then favourite it.")
         cacheable = post.media_type == "video" and bool(post.video_url)
