@@ -1,0 +1,31 @@
+[project]
+name = "socialall"
+version = "0.2.0"
+description = "Collect social media content by topic from X, Instagram, Xiaohongshu, TikTok and LinkedIn."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+socialall = "socialall.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["socialall*"]
+
+[tool.setuptools.package-data]
+socialall = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
