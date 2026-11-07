@@ -101,7 +101,8 @@ function tileHtml(p, i) {
   const meta = `<div class="meta">${hasMedia ? "" : `<span class="dot" data-p="${esc(p.platform)}"></span>`}
       <span class="who">${esc(p.author || label)}</span>${state.newKeys.has(key) ? `<span class="new">New</span>` : ""}<span class="when">${esc(ago(p.created_at))}</span></div>`;
   const find = state.view === "favorites" ? ` data-s="${esc(`${p.text} ${p.author || ""} ${label}`.toLowerCase())}"` : "";
-  return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}"${find}>
+  const also = p.also_on?.length ? ` data-also="${esc(p.also_on.map((a) => a.platform).join(" "))}"` : "";
+  return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}"${find}${also}>
     <button class="fav" type="button" data-act="fav" aria-pressed="${!!fav}" aria-label="${fav ? "Remove from favourites" : "Add to favourites"}">${icon("star")}</button>
     <button class="tile-open" type="button" data-act="open" aria-label="Open ${esc(label)} post">
       ${frame}
@@ -147,7 +148,9 @@ function applyFilters() {
   const q = state.view === "favorites" ? state.findQuery : "";
   const tiles = $("feed").querySelectorAll(".tile");
   for (const el of tiles) {
-    const ok = !state.hiddenPlatforms.has(el.dataset.p) && (state.kind === "all" || el.dataset.kind === state.kind)
+    // A collapsed cross-post shows while any of its platforms is shown.
+    const platforms = el.dataset.also ? [el.dataset.p, ...el.dataset.also.split(" ")] : [el.dataset.p];
+    const ok = platforms.some((k) => !state.hiddenPlatforms.has(k)) && (state.kind === "all" || el.dataset.kind === state.kind)
       && (!q || el.dataset.s?.includes(q));
     el.hidden = !ok;
     if (ok) shown++;
@@ -158,7 +161,7 @@ function applyFilters() {
 
 function renderChips() {
   const counts = {};
-  for (const p of state.posts) counts[p.platform] = (counts[p.platform] || 0) + 1;
+  for (const p of state.posts) for (const k of [p.platform, ...(p.also_on || []).map((a) => a.platform)]) counts[k] = (counts[k] || 0) + 1;
   const present = Object.keys(PLATFORMS).filter((k) => counts[k]);
   $("filters").hidden = !state.posts.length;
   $("sort").hidden = state.view !== "topic";
@@ -513,6 +516,15 @@ function brokenImage(p) {
     ${safe(p.url) ? `<a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener">${icon("external")}<span>Open on ${esc(label)}</span></a>` : ""}</div>`;
 }
 
+function alsoHtml(p) {
+  if (!p.also_on?.length) return "";
+  const items = p.also_on.map((a) => {
+    const label = esc(PLATFORMS[a.platform] || a.platform);
+    return safe(a.url) ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${label}</a>` : label;
+  });
+  return `<div class="also">Also on ${items.join(" · ")}</div>`;
+}
+
 function refreshViewerPanel() {
   if (state.viewerIndex < 0) return;
   const p = state.posts[state.viewerIndex];
@@ -525,6 +537,7 @@ function refreshViewerPanel() {
     ${when ? `<div class="sub">${esc(when)}</div>` : ""}
     ${p.text ? `<p class="full">${esc(p.text)}</p>` : ""}
     ${statsHtml(p)}
+    ${alsoHtml(p)}
     ${cacheHtml(fav)}
     <div class="actions">
       <button class="btn${fav ? "" : " ghost"}" type="button" data-act="fav" aria-pressed="${!!fav}">${icon("star")}<span>${fav ? "Starred" : "Star"}</span></button>

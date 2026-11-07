@@ -12,6 +12,10 @@ from ..models import PlatformStatus, Post
 class ConnectorError(RuntimeError):
     """Raised when a platform call fails in a way worth showing the user."""
 
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
 
 class Connector(ABC):
     """Base class for one platform.
@@ -57,7 +61,7 @@ class Connector(ABC):
     def check(response: httpx.Response) -> dict:
         if response.status_code >= 400:
             detail = response.text[:300]
-            raise ConnectorError(f"HTTP {response.status_code}: {detail}")
+            raise ConnectorError(f"HTTP {response.status_code}: {detail}", status=response.status_code)
         return response.json()
 
 

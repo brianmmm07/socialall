@@ -73,6 +73,26 @@ class VideoCache:
             finally:
                 part.unlink(missing_ok=True)
 
+    # Only files this cache wrote: the folder is user-chosen and may hold other things.
+    OWN = re.compile(r"^(x|instagram|xiaohongshu|tiktok|linkedin)-.+\.(mp4|webm|mov|part)$")
+
+    def prune(self, keep_stems: set[str], include_partial: bool = False) -> dict:
+        """Delete our video files whose favourite is gone. `.part` files are only
+        removed when `include_partial` is set (at startup, when nothing is downloading)."""
+        files = freed = 0
+        for p in self.folder.iterdir():
+            if not p.is_file() or not self.OWN.match(p.name):
+                continue
+            if p.suffix == ".part" and not include_partial:
+                continue
+            if p.suffix != ".part" and p.stem in keep_stems:
+                continue
+            size = p.stat().st_size
+            p.unlink(missing_ok=True)
+            files += 1
+            freed += size
+        return {"files": files, "bytes": freed}
+
     def remove(self, filename: str | None) -> None:
         if filename:
             (self.folder / Path(filename).name).unlink(missing_ok=True)
@@ -80,3 +100,9 @@ class VideoCache:
     def usage(self) -> dict:
         files = [p for p in self.folder.iterdir() if p.is_file() and p.suffix != ".part"]
         return {"folder": str(self.folder.resolve()), "files": len(files), "bytes": sum(p.stat().st_size for p in files)}
+
+
+def favorite_stems(store) -> set[str]:
+    """File stems for every favourite, whatever its download state, so prune never
+    deletes a file that a download has just finished writing."""
+    return {VideoCache.stem(*key.split(":", 1)) for key in store.favorite_keys()}

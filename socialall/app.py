@@ -22,7 +22,7 @@ from .aggregator import collect
 from .connectors import DemoConnector, active_connectors, all_connectors
 from .models import Favorite, PlatformStatus, Post, SearchResult
 from .storage import Store
-from .video_cache import CacheError, VideoCache
+from .video_cache import CacheError, VideoCache, favorite_stems
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
@@ -89,7 +89,11 @@ def create_app(
         )
         state["videos"] = VideoCache(folder, state["client"], max_mb=config.int_env("SOCIALALL_MAX_VIDEO_MB", 500))
         state["search_cache"] = SearchCache(config.int_env("SOCIALALL_SEARCH_TTL", 300))
-        # Pick up downloads that were interrupted by a restart.
+        # Clear out leftovers from crashes or a reset database, then pick up
+        # downloads that were interrupted by a restart.
+        freed = state["videos"].prune(favorite_stems(state["store"]), include_partial=True)
+        if freed["files"]:
+            log.info("video cache: removed %d leftover files (%d bytes)", freed["files"], freed["bytes"])
         for fav in state["store"].list_favorites(status="pending"):
             start_download(fav["post"])
         yield

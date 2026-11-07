@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field
 MediaType = Literal["text", "image", "video"]
 
 
+class AlsoOn(BaseModel):
+    """The same post found on another platform."""
+
+    platform: str
+    id: str
+    url: str | None = None
+
+
 class Post(BaseModel):
     """A single piece of content, normalised across platforms."""
 
@@ -26,6 +34,7 @@ class Post(BaseModel):
     comments: int | None = None
     shares: int | None = None
     views: int | None = None
+    also_on: list[AlsoOn] = Field(default_factory=list)  # cross-posts collapsed into this one
     raw: dict = Field(default_factory=dict, exclude=True)
 
     @property
