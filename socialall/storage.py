@@ -93,6 +93,20 @@ class Store:
         row = self.conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
         return self._topic(row) if row else None
 
+    def update_topic(self, topic_id: int, name: str | None = None, platforms: list[str] | None = None,
+                     set_platforms: bool = False) -> dict | None:
+        """Rename a topic and/or change its platforms. Stored posts are kept.
+        Raises sqlite3.IntegrityError when another topic has the name."""
+        with self.conn:
+            if name is not None:
+                self.conn.execute("UPDATE topics SET name = ? WHERE id = ?", (name.strip(), topic_id))
+            if set_platforms:
+                self.conn.execute(
+                    "UPDATE topics SET platforms = ? WHERE id = ?",
+                    (json.dumps(platforms) if platforms else None, topic_id),
+                )
+        return self.get_topic(topic_id)
+
     def delete_topic(self, topic_id: int) -> bool:
         with self.conn:
             cur = self.conn.execute("DELETE FROM topics WHERE id = ?", (topic_id,))

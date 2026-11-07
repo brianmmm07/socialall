@@ -15,7 +15,8 @@ const state = {
   hiddenPlatforms: new Set(),
   kind: "all",
   sort: stored("sort", "recent") === "top" ? "top" : "recent",  // topic view only
-  newKeys: new Set(),  // posts that arrived in the last refresh of this topic
+  newKeys: new Set(),
+  findQuery: "",       // favourites view only, lower-cased  // posts that arrived in the last refresh of this topic
   offset: 0,
   hasMore: false,
   viewerIndex: -1,
@@ -99,7 +100,8 @@ function tileHtml(p, i) {
   }
   const meta = `<div class="meta">${hasMedia ? "" : `<span class="dot" data-p="${esc(p.platform)}"></span>`}
       <span class="who">${esc(p.author || label)}</span>${state.newKeys.has(key) ? `<span class="new">New</span>` : ""}<span class="when">${esc(ago(p.created_at))}</span></div>`;
-  return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}">
+  const find = state.view === "favorites" ? ` data-s="${esc(`${p.text} ${p.author || ""} ${label}`.toLowerCase())}"` : "";
+  return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}"${find}>
     <button class="fav" type="button" data-act="fav" aria-pressed="${!!fav}" aria-label="${fav ? "Remove from favourites" : "Add to favourites"}">${icon("star")}</button>
     <button class="tile-open" type="button" data-act="open" aria-label="Open ${esc(label)} post">
       ${frame}
@@ -142,11 +144,15 @@ function skeleton(n = 8) {
 /* Filtering only toggles visibility, so it never rebuilds the feed. */
 function applyFilters() {
   let shown = 0;
-  for (const el of $("feed").querySelectorAll(".tile")) {
-    const ok = !state.hiddenPlatforms.has(el.dataset.p) && (state.kind === "all" || el.dataset.kind === state.kind);
+  const q = state.view === "favorites" ? state.findQuery : "";
+  const tiles = $("feed").querySelectorAll(".tile");
+  for (const el of tiles) {
+    const ok = !state.hiddenPlatforms.has(el.dataset.p) && (state.kind === "all" || el.dataset.kind === state.kind)
+      && (!q || el.dataset.s?.includes(q));
     el.hidden = !ok;
     if (ok) shown++;
   }
+  $("nomatch").hidden = !(q && tiles.length && !shown);
   return shown;
 }
 
@@ -156,6 +162,7 @@ function renderChips() {
   const present = Object.keys(PLATFORMS).filter((k) => counts[k]);
   $("filters").hidden = !state.posts.length;
   $("sort").hidden = state.view !== "topic";
+  $("find").hidden = state.view !== "favorites";
   $("chips").innerHTML = present.map((k) =>
     `<button class="chip" type="button" data-p="${k}" aria-pressed="${!state.hiddenPlatforms.has(k)}"><span class="dot"></span>${PLATFORMS[k]}<span class="n">${counts[k]}</span></button>`).join("");
 }
@@ -297,6 +304,7 @@ async function refreshTopic() {
 
 async function openFavorites() {
   state.searchAbort?.abort();
+  if (state.view !== "favorites") { state.findQuery = ""; $("find-q").value = ""; }
   Object.assign(state, { view: "favorites", topic: null, hasMore: false, newKeys: new Set() });
   $("save").disabled = true;
   markNav();
@@ -489,6 +497,7 @@ async function loadTopics() {
   $("topics-empty").hidden = topics.length > 0;
   $("topics").innerHTML = topics.map((t) => `<li class="topic">
       <button class="topic-btn" type="button" data-id="${t.id}"><span>${esc(t.name)}</span><span class="count">${t.post_count}</span></button>
+      <button class="topic-edit" type="button" data-edit="${t.id}" aria-label="Rename topic ${esc(t.name)}" title="Rename">${icon("pen")}</button>
       <button class="topic-del" type="button" data-del="${t.id}" aria-label="Delete topic ${esc(t.name)}">${icon("trash")}</button>
     </li>`).join("");
   state.topicList = topics;
@@ -531,10 +540,50 @@ $("save").addEventListener("click", async () => {
   } catch (e) { toast(e.message); }
 });
 $("refresh").addEventListener("click", refreshTopic);
+
+let findTimer;
+$("find-q").addEventListener("input", (e) => {
+  clearTimeout(findTimer);
+  findTimer = setTimeout(() => { state.findQuery = e.target.value.trim().toLowerCase(); applyFilters(); }, 200);
+});
+$("find-q").addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.preventDefault(); e.target.value = ""; state.findQuery = ""; applyFilters(); }
+});
+
+/* Rename a topic in place. Enter saves, Esc or leaving the field cancels. */
+function editTopic(li, t) {
+  if (!li || !t || li.querySelector(".topic-form")) return;
+  li.innerHTML = `<form class="topic-form"><input value="${esc(t.name)}" aria-label="Topic name" required></form>`;
+  const input = li.querySelector("input");
+  let done = false;
+  const finish = () => { if (!done) { done = true; loadTopics(); } };
+  input.focus();
+  input.select();
+  input.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); finish(); } });
+  input.addEventListener("blur", finish);
+  li.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (!name || name === t.name) return finish();
+    try {
+      const updated = await api(`/api/topics/${t.id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+      if (state.view === "topic" && state.topic?.id === t.id) {
+        state.topic = { ...state.topic, ...updated };
+        state.query = updated.name;
+        $("q").value = updated.name;
+        setHeader(updated.name, topicSub(state.topic), true);
+      }
+      toast("Renamed. The next refresh searches for the new name");
+    } catch (err) { toast(err.message); }
+    finish();
+  });
+}
 $("more-btn").addEventListener("click", loadMore);
 $("nav-favs").addEventListener("click", openFavorites);
 
 $("topics").addEventListener("click", async (e) => {
+  const edit = e.target.closest("[data-edit]");
+  if (edit) return editTopic(edit.closest(".topic"), state.topicList.find((t) => t.id === +edit.dataset.edit));
   const del = e.target.closest("[data-del]");
   if (del) {
     const id = +del.dataset.del;

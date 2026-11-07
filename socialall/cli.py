@@ -3,6 +3,7 @@
     socialall serve                  # start the web app
     socialall search "AI agents"     # print posts for a topic
     socialall platforms              # show which platforms are configured
+    socialall export --format md     # write your favourites as Markdown or JSON
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import json
 
 import httpx
 
-from . import config
+from . import config, export
 from .aggregator import collect
 from .connectors import active_connectors, all_connectors
 
@@ -51,6 +52,10 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("platforms", help="Show platform setup status")
 
+    e = sub.add_parser("export", help="Export favourites")
+    e.add_argument("--format", choices=sorted(export.FORMATS), default="md")
+    e.add_argument("-o", "--output", help="File to write (default: print)")
+
     args = parser.parse_args(argv)
     if args.cmd == "search":
         asyncio.run(_search(args))
@@ -58,6 +63,19 @@ def main(argv: list[str] | None = None) -> None:
         import uvicorn
 
         uvicorn.run("socialall.app:app", host=args.host, port=args.port)
+    elif args.cmd == "export":
+        from .storage import Store
+
+        store = Store(config.db_path())
+        try:
+            text = export.render(store.list_favorites(), args.format)
+        finally:
+            store.close()
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(text)
+        else:
+            print(text, end="")
     elif args.cmd == "platforms":
         for c in all_connectors():
             s = c.status()

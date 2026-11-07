@@ -29,6 +29,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
     <symbol id="i-disk" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
     <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M21.2 6.8a2.8 2.8 0 0 0-4-4L4 16l-1 5 5-1Z"/><path d="m15 5 4 4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
   </defs>
 </svg>
@@ -58,6 +59,7 @@
       <h2 class="rail-heading">Sources</h2>
       <ul class="sources" id="sources"></ul>
       <p class="storage" id="storage"></p>
+      <p class="export">Export favourites: <a href="/api/favorites/export?format=md" download>Markdown</a> · <a href="/api/favorites/export?format=json" download>JSON</a></p>
     </div>
   </nav>
 
@@ -82,10 +84,15 @@
         <button type="button" data-sort="recent" aria-pressed="true">Recent</button>
         <button type="button" data-sort="top" aria-pressed="false">Top</button>
       </div>
+      <label class="find" id="find" hidden>
+        <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="find-q" type="search" placeholder="Find in favourites" autocomplete="off" aria-label="Find in favourites">
+      </label>
       <div class="chips" id="chips" role="group" aria-label="Platforms"></div>
     </div>
     <div class="notice" id="notice" role="status" hidden></div>
     <div class="feed" id="feed" aria-live="polite"></div>
+    <p class="nomatch" id="nomatch" hidden>No favourites match.</p>
     <div class="more" id="more" hidden><button class="btn ghost" type="button" id="more-btn">Show more</button></div>
   </main>
 </div>
