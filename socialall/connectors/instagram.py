@@ -47,7 +47,10 @@ class InstagramConnector(Connector):
         if not ids:
             raise ConnectorError(f"No Instagram hashtag found for #{hashtag}")
 
-        fields = "id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count"
+        fields = (
+            "id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count,"
+            "children{media_type,media_url}"
+        )
         data = self.check(
             await self.client.get(
                 f"{self.base_url}/{ids[0]}/recent_media",
@@ -62,7 +65,7 @@ class InstagramConnector(Connector):
                     id=item["id"],
                     text=item.get("caption", ""),
                     url=item.get("permalink"),
-                    media_url=item.get("media_url") if item.get("media_type") != "VIDEO" else None,
+                    **media_fields(item),
                     created_at=parse_time(item.get("timestamp")),
                     likes=item.get("like_count"),
                     comments=item.get("comments_count"),
@@ -70,3 +73,21 @@ class InstagramConnector(Connector):
                 )
             )
         return posts
+
+
+def media_fields(item: dict) -> dict:
+    """Map an Instagram media object (IMAGE, VIDEO or CAROUSEL_ALBUM) to Post fields."""
+    kind = item.get("media_type")
+    if kind == "VIDEO":
+        return {"media_type": "video", "video_url": item.get("media_url")}
+    if kind == "CAROUSEL_ALBUM":
+        children = item.get("children", {}).get("data", [])
+        videos = [c["media_url"] for c in children if c.get("media_type") == "VIDEO" and c.get("media_url")]
+        images = [c["media_url"] for c in children if c.get("media_type") == "IMAGE" and c.get("media_url")]
+        if videos and not images:
+            return {"media_type": "video", "video_url": videos[0]}
+        if images:
+            return {"media_type": "image", "images": images, "thumbnail_url": images[0]}
+    if item.get("media_url"):
+        return {"media_type": "image", "images": [item["media_url"]], "thumbnail_url": item["media_url"]}
+    return {}

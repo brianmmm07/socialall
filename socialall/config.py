@@ -38,3 +38,14 @@ def demo_mode() -> str:
     if value in ("0", "false", "no", "off"):
         return "off"
     return "auto"
+
+
+def cache_dir() -> str:
+    return env("SOCIALALL_CACHE_DIR", "cache/videos")
+
+
+def int_env(name: str, default: int) -> int:
+    try:
+        return int(env(name) or default)
+    except ValueError:
+        return default

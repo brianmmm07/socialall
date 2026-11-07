@@ -67,7 +67,29 @@ def test_instagram_hashtag_flow(monkeypatch):
 
     posts = run(InstagramConnector(client_for(handler)).search("Machine Learning"))
     assert posts[0].url == "https://instagram.com/p/abc"
-    assert posts[0].media_url == "https://cdn/img.jpg"
+    assert posts[0].media_type == "image"
+    assert posts[0].images == ["https://cdn/img.jpg"]
+
+
+def test_instagram_media_kinds():
+    from socialall.connectors.instagram import media_fields
+
+    assert media_fields({"media_type": "VIDEO", "media_url": "https://v.mp4"}) == {
+        "media_type": "video", "video_url": "https://v.mp4"}
+    album = {"media_type": "CAROUSEL_ALBUM", "children": {"data": [
+        {"media_type": "IMAGE", "media_url": "https://a.jpg"},
+        {"media_type": "IMAGE", "media_url": "https://b.jpg"}]}}
+    assert media_fields(album)["images"] == ["https://a.jpg", "https://b.jpg"]
+
+
+def test_x_picks_best_video_variant():
+    from socialall.connectors.x import media_fields
+
+    out = media_fields([{"type": "video", "preview_image_url": "https://p.jpg", "variants": [
+        {"content_type": "application/x-mpegURL", "url": "https://m3u8"},
+        {"content_type": "video/mp4", "bit_rate": 256000, "url": "https://low.mp4"},
+        {"content_type": "video/mp4", "bit_rate": 2176000, "url": "https://high.mp4"}]}])
+    assert out == {"media_type": "video", "video_url": "https://high.mp4", "thumbnail_url": "https://p.jpg"}
 
 
 def test_tiktok_research_query(monkeypatch):
@@ -88,6 +110,7 @@ def test_tiktok_research_query(monkeypatch):
     posts = run(TikTokConnector(client_for(handler)).search("cats"))
     assert posts[0].url == "https://www.tiktok.com/@bob/video/42"
     assert posts[0].views == 100
+    assert posts[0].embed_url == "https://www.tiktok.com/player/v1/42"
 
 
 def test_linkedin_filters_by_topic(monkeypatch):
@@ -110,11 +133,15 @@ def test_xiaohongshu_bridge(monkeypatch):
 
     def handler(request):
         assert request.url.params["keyword"] == "咖啡"
-        return httpx.Response(200, json={"items": [{"id": "n1", "title": "咖啡店", "desc": "推荐", "likes": 3}]})
+        return httpx.Response(200, json={"items": [
+            {"id": "n1", "title": "咖啡店", "desc": "推荐", "likes": 3, "images": ["https://i/1.jpg", "https://i/2.jpg"]},
+            {"id": "n2", "title": "vlog", "video": "https://v/2.mp4", "cover": "https://i/c.jpg"}]})
 
     posts = run(XiaohongshuConnector(client_for(handler)).search("咖啡"))
     assert posts[0].text == "咖啡店\n推荐"
     assert posts[0].url == "https://www.xiaohongshu.com/explore/n1"
+    assert posts[0].media_type == "image" and len(posts[0].images) == 2
+    assert posts[1].media_type == "video" and posts[1].thumbnail_url == "https://i/c.jpg"
 
 
 def test_demo_only_when_nothing_configured(monkeypatch):
@@ -123,3 +150,15 @@ def test_demo_only_when_nothing_configured(monkeypatch):
     assert [c.name for c in active_connectors()] == ["x"]
     monkeypatch.setenv("SOCIALALL_DEMO", "on")
     assert [c.name for c in active_connectors()] == ["x", "demo"]
+
+
+def test_slow_platform_is_cut_off(monkeypatch):
+    from socialall.aggregator import collect
+    from socialall.connectors import DemoConnector
+
+    class Slow(XConnector):
+        async def search(self, topic, limit=20):
+            await asyncio.sleep(5)
+
+    result = run(collect("ai", [Slow(), DemoConnector()], 5, timeout=0.05))
+    assert "x" in result.errors and len(result.posts) == 5

@@ -14,15 +14,21 @@ async def collect(
     connectors: list[Connector],
     limit_per_platform: int = 20,
     platforms: list[str] | None = None,
+    timeout: float = 15,
 ) -> SearchResult:
     """Search every connector at once. One platform failing does not stop the others."""
     topic = topic.strip()
     wanted = set(platforms) if platforms else None
     chosen = [c for c in connectors if wanted is None or c.name in wanted or c.name == "demo"]
 
-    results = await asyncio.gather(
-        *(c.search(topic, limit_per_platform) for c in chosen), return_exceptions=True
-    )
+    async def run(c: Connector):
+        try:
+            return await asyncio.wait_for(c.search(topic, limit_per_platform), timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"No answer within {timeout:g}s") from None
+
+    # A slow platform is cut off at `timeout` so it cannot hold up the rest.
+    results = await asyncio.gather(*(run(c) for c in chosen), return_exceptions=True)
 
     posts: dict[str, Post] = {}
     errors: dict[str, str] = {}

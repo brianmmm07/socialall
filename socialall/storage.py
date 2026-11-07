@@ -26,7 +26,29 @@ CREATE TABLE IF NOT EXISTS posts (
     PRIMARY KEY (topic_id, platform, post_id)
 );
 CREATE INDEX IF NOT EXISTS posts_by_time ON posts(topic_id, created_at DESC);
+-- Every post shown in a search, so a favourite is saved from the server's own copy.
+CREATE TABLE IF NOT EXISTS seen (
+    platform TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (platform, post_id)
+);
+CREATE TABLE IF NOT EXISTS favorites (
+    platform TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    favorited_at TEXT NOT NULL,
+    cache_status TEXT NOT NULL,
+    cache_file TEXT,
+    cache_bytes INTEGER,
+    cache_error TEXT,
+    PRIMARY KEY (platform, post_id)
+);
+CREATE INDEX IF NOT EXISTS favorites_by_time ON favorites(favorited_at DESC);
 """
+
+FAVORITE_COLUMNS = "data, favorited_at, cache_status, cache_file, cache_bytes, cache_error"
 
 
 def _now() -> str:
@@ -38,7 +60,12 @@ class Store:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.executescript(SCHEMA)
+        # Keep the seen table small: posts not favourited go after a week.
+        with self.conn:
+            self.conn.execute("DELETE FROM seen WHERE seen_at < datetime('now', '-7 days')")
 
     def close(self) -> None:
         self.conn.close()
@@ -98,6 +125,7 @@ class Store:
                 ],
             )
             self.conn.execute("UPDATE topics SET refreshed_at = ? WHERE id = ?", (now, topic_id))
+        self.remember(posts)
         return len(posts)
 
     def get_posts(
@@ -111,3 +139,75 @@ class Store:
         sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         args += [limit, offset]
         return [Post.model_validate_json(r["data"]) for r in self.conn.execute(sql, args)]
+
+    # Posts seen in searches
+    def remember(self, posts: list[Post]) -> None:
+        now = _now()
+        with self.conn:
+            self.conn.executemany(
+                "INSERT INTO seen(platform, post_id, data, seen_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(platform, post_id) DO UPDATE SET data = excluded.data, seen_at = excluded.seen_at",
+                [(p.platform, p.id, p.model_dump_json(), now) for p in posts],
+            )
+
+    def seen_post(self, platform: str, post_id: str) -> Post | None:
+        row = self.conn.execute(
+            "SELECT data FROM seen WHERE platform = ? AND post_id = ?", (platform, post_id)
+        ).fetchone()
+        return Post.model_validate_json(row["data"]) if row else None
+
+    # Favourites
+    def add_favorite(self, post: Post, cache_status: str) -> dict:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO favorites(platform, post_id, data, favorited_at, cache_status) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(platform, post_id) DO NOTHING",
+                (post.platform, post.id, post.model_dump_json(), _now(), cache_status),
+            )
+        return self.get_favorite(post.platform, post.id)
+
+    def get_favorite(self, platform: str, post_id: str) -> dict | None:
+        row = self.conn.execute(
+            f"SELECT {FAVORITE_COLUMNS} FROM favorites WHERE platform = ? AND post_id = ?",
+            (platform, post_id),
+        ).fetchone()
+        return self._favorite(row) if row else None
+
+    def list_favorites(self, status: str | None = None) -> list[dict]:
+        sql = f"SELECT {FAVORITE_COLUMNS} FROM favorites"
+        args: list = []
+        if status:
+            sql += " WHERE cache_status = ?"
+            args.append(status)
+        sql += " ORDER BY favorited_at DESC"
+        return [self._favorite(r) for r in self.conn.execute(sql, args)]
+
+    def favorite_keys(self) -> list[str]:
+        rows = self.conn.execute("SELECT platform || ':' || post_id AS k FROM favorites")
+        return [r["k"] for r in rows]
+
+    def update_cache(
+        self, platform: str, post_id: str, status: str,
+        file: str | None = None, size: int | None = None, error: str | None = None,
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE favorites SET cache_status = ?, cache_file = ?, cache_bytes = ?, cache_error = ? "
+                "WHERE platform = ? AND post_id = ?",
+                (status, file, size, error, platform, post_id),
+            )
+
+    def delete_favorite(self, platform: str, post_id: str) -> dict | None:
+        fav = self.get_favorite(platform, post_id)
+        if fav:
+            with self.conn:
+                self.conn.execute(
+                    "DELETE FROM favorites WHERE platform = ? AND post_id = ?", (platform, post_id)
+                )
+        return fav
+
+    @staticmethod
+    def _favorite(row: sqlite3.Row) -> dict:
+        d = dict(row)
+        d["post"] = Post.model_validate_json(d.pop("data"))
+        return d

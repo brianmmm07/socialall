@@ -78,6 +78,9 @@ class TikTokConnector(Connector):
                     text=video.get("video_description", ""),
                     author=f"@{username}" if username else None,
                     url=f"https://www.tiktok.com/@{username}/video/{vid}" if username else None,
+                    # The Research API gives no video file, so play it in TikTok's embed player.
+                    media_type="video",
+                    embed_url=f"https://www.tiktok.com/player/v1/{vid}",
                     created_at=parse_time(video.get("create_time")),
                     likes=video.get("like_count"),
                     comments=video.get("comment_count"),

@@ -5,6 +5,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from ..models import Post
+from ..config import env
 from .base import Connector
 
 PLATFORMS = ["x", "instagram", "xiaohongshu", "tiktok", "linkedin"]
@@ -16,6 +17,39 @@ TEMPLATES = {
     "tiktok": "POV: you finally understand {t} in 60 seconds #{tag} #fyp",
     "linkedin": "Three lessons our team learned this quarter working on {t}.",
 }
+
+
+# Public sample media: Lorem Picsum photos and MDN's CC0 sample videos.
+DEMO_VIDEOS = [
+    "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+    "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/friday.mp4",
+]
+
+
+def _image(seed: str) -> str:
+    return f"https://picsum.photos/seed/{seed}/720/900"
+
+
+def _videos() -> list[str]:
+    custom = [u.strip() for u in (env("SOCIALALL_DEMO_VIDEO_URLS") or "").split(",") if u.strip()]
+    return custom or DEMO_VIDEOS
+
+
+def _media(platform: str, i: int, pid: str) -> dict:
+    """Give each sample post the kind of media its platform usually carries."""
+    if platform == "tiktok" or (platform == "x" and i % 3 == 0):
+        videos = _videos()
+        return {
+            "media_type": "video",
+            "video_url": videos[i % len(videos)],
+            "thumbnail_url": _image(f"{pid}-poster"),
+        }
+    if platform in ("instagram", "xiaohongshu"):
+        images = [_image(f"{pid}-{n}") for n in range(1 + i % 3)]
+        return {"media_type": "image", "images": images, "thumbnail_url": images[0]}
+    if platform == "x" and i % 3 == 1:
+        return {"media_type": "image", "images": [_image(pid)], "thumbnail_url": _image(pid)}
+    return {}
 
 
 class DemoConnector(Connector):
@@ -42,6 +76,7 @@ class DemoConnector(Connector):
                     text=TEMPLATES[platform].format(t=topic, tag=tag),
                     author=f"@sample_{platform}_{rng.randint(1, 999)}",
                     url=None,
+                    **_media(platform, i, pid),
                     created_at=now - timedelta(minutes=rng.randint(1, 60 * 24 * 7)),
                     likes=rng.randint(0, 50_000),
                     comments=rng.randint(0, 2_000),

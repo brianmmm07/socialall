@@ -23,7 +23,7 @@ class XConnector(Connector):
             "tweet.fields": "created_at,public_metrics,author_id,attachments",
             "expansions": "author_id,attachments.media_keys",
             "user.fields": "username,name",
-            "media.fields": "url,preview_image_url",
+            "media.fields": "url,preview_image_url,type,variants",
         }
         headers = {"Authorization": f"Bearer {self.setting('X_BEARER_TOKEN')}"}
         data = self.check(
@@ -38,8 +38,7 @@ class XConnector(Connector):
             user = users.get(tweet.get("author_id"), {})
             username = user.get("username")
             metrics = tweet.get("public_metrics", {})
-            keys = tweet.get("attachments", {}).get("media_keys", [])
-            first = media.get(keys[0], {}) if keys else {}
+            items = [media[k] for k in tweet.get("attachments", {}).get("media_keys", []) if k in media]
             posts.append(
                 Post(
                     platform=self.name,
@@ -47,7 +46,7 @@ class XConnector(Connector):
                     text=tweet.get("text", ""),
                     author=f"@{username}" if username else None,
                     url=f"https://x.com/{username or 'i'}/status/{tweet['id']}",
-                    media_url=first.get("url") or first.get("preview_image_url"),
+                    **media_fields(items),
                     created_at=parse_time(tweet.get("created_at")),
                     likes=metrics.get("like_count"),
                     comments=metrics.get("reply_count"),
@@ -57,3 +56,21 @@ class XConnector(Connector):
                 )
             )
         return posts
+
+
+def media_fields(items: list[dict]) -> dict:
+    """Map X media objects to Post media fields."""
+    videos = [m for m in items if m.get("type") in ("video", "animated_gif")]
+    if videos:
+        v = videos[0]
+        mp4s = [x for x in v.get("variants", []) if x.get("content_type") == "video/mp4"]
+        best = max(mp4s, key=lambda x: x.get("bit_rate", 0), default=None)
+        return {
+            "media_type": "video",
+            "video_url": best["url"] if best else None,
+            "thumbnail_url": v.get("preview_image_url"),
+        }
+    photos = [m["url"] for m in items if m.get("type") == "photo" and m.get("url")]
+    if photos:
+        return {"media_type": "image", "images": photos, "thumbnail_url": photos[0]}
+    return {}

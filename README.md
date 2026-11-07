@@ -4,6 +4,12 @@ Collect content about a topic from X, Instagram, Xiaohongshu (小红书), TikTok
 LinkedIn in one feed. Save topics, refresh them, and browse the results in a web
 UI, through a JSON API, or from the command line.
 
+- **Watch videos and browse images** in a full-screen viewer (keyboard: ←/→ images,
+  ↑/↓ posts, `f` to star, `Esc` to close).
+- **Star posts** to keep them in Favourites. Videos of starred posts are
+  downloaded to a local folder (`cache/videos/` by default) and play from there,
+  so they still work offline or after the platform removes them.
+
 It runs with no API keys at all: until you add credentials it shows sample
 ("demo") posts so you can try the app.
 
@@ -33,6 +39,33 @@ API docs are at `http://127.0.0.1:8000/docs` once the server is running.
 | `GET/POST /api/topics`, `DELETE /api/topics/{id}` | Saved topics |
 | `POST /api/topics/{id}/refresh` | Collect new posts for a topic and store them |
 | `GET /api/topics/{id}/posts?platform=x` | Stored posts for a topic |
+| `GET/POST /api/favorites`, `DELETE /api/favorites/{platform}/{id}` | Favourites; starring a video starts its download |
+| `POST /api/favorites/{platform}/{id}/retry` | Retry a failed video download |
+| `GET /api/favorites/storage` | Cache folder location, file count and size |
+| `GET /cache/<file>` | Cached videos (supports seeking) |
+
+## Favourites and the video cache
+
+Starring a post saves it in the database. If the post has a direct video file
+(X, Instagram, Xiaohongshu bridge), the server downloads it in the background
+into `SOCIALALL_CACHE_DIR` as `<platform>-<post id>.mp4`. Downloads stream to a
+`.part` file and are renamed when complete, run two at a time, and stop at
+`SOCIALALL_MAX_VIDEO_MB` (default 500). Unstarring deletes the file. Downloads
+cut off by a restart resume on the next start.
+
+TikTok's official API gives no video file, only an embeddable player, so TikTok
+favourites are kept but play online only.
+
+## Performance
+
+- Platforms are searched in parallel; one that takes longer than
+  `SOCIALALL_PLATFORM_TIMEOUT` seconds (default 15) is skipped and reported.
+- Repeat searches within `SOCIALALL_SEARCH_TTL` seconds (default 300) come from
+  memory, which also saves paid API quota. Refresh bypasses it.
+- One shared HTTP connection pool, SQLite in WAL mode, gzip for API responses.
+- The page loads no framework. Images are lazy-loaded in fixed 4:5 frames so
+  nothing jumps; videos are only created when you open one, and stopped when you
+  close the viewer. Filters hide and show tiles without rebuilding the feed.
 
 ## Platforms and the credentials you need
 
@@ -54,7 +87,8 @@ GET {XHS_BRIDGE_URL}?keyword=<topic>&limit=<n>
 Authorization: Bearer {XHS_BRIDGE_TOKEN}   (only if set)
 
 {"items": [{"id": "...", "title": "...", "desc": "...", "author": "...",
-            "url": "...", "cover": "https://...", "created_at": "ISO or unix",
+            "url": "...", "cover": "https://...", "images": ["https://..."],
+            "video": "https://...mp4", "created_at": "ISO or unix",
             "likes": 0, "comments": 0, "shares": 0}]}
 ```
 
@@ -72,4 +106,5 @@ Authorization: Bearer {XHS_BRIDGE_TOKEN}   (only if set)
 pytest
 ```
 
-Data is stored in SQLite (`socialall.db`, change with `SOCIALALL_DB`).
+Data is stored in SQLite (`socialall.db`, change with `SOCIALALL_DB`). Design
+decisions for the UI are in [DESIGN.md](DESIGN.md).

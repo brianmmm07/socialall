@@ -1,11 +1,11 @@
 [project]
 name = "socialall"
-version = "0.1.0"
+version = "0.2.0"
 description = "Collect social media content by topic from X, Instagram, Xiaohongshu, TikTok and LinkedIn."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.110",
+    "fastapi>=0.115",
     "uvicorn>=0.29",
     "httpx>=0.27",
     "pydantic>=2.6",

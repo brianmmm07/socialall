@@ -13,6 +13,7 @@ class XiaohongshuConnector(Connector):
 
         GET {XHS_BRIDGE_URL}?keyword=<topic>&limit=<n>
         -> {"items": [{"id", "title", "desc", "author", "url", "cover",
+                        "images": [...], "video": "https://...mp4",
                         "created_at", "likes", "comments", "shares"}]}
 
     Scraping may break Xiaohongshu's terms of service; check before using it.
@@ -42,6 +43,9 @@ class XiaohongshuConnector(Connector):
         for item in data.get("items", [])[:limit]:
             nid = str(item["id"])
             title, desc = item.get("title") or "", item.get("desc") or ""
+            images = [u for u in item.get("images") or [] if u]
+            video = item.get("video")
+            cover = item.get("cover") or (images[0] if images else None)
             posts.append(
                 Post(
                     platform=self.name,
@@ -49,7 +53,10 @@ class XiaohongshuConnector(Connector):
                     text="\n".join(t for t in (title, desc) if t),
                     author=item.get("author"),
                     url=item.get("url") or f"https://www.xiaohongshu.com/explore/{nid}",
-                    media_url=item.get("cover"),
+                    media_type="video" if video else ("image" if images or cover else "text"),
+                    images=images or ([cover] if cover and not video else []),
+                    video_url=video,
+                    thumbnail_url=cover,
                     created_at=parse_time(item.get("created_at")),
                     likes=item.get("likes"),
                     comments=item.get("comments"),
