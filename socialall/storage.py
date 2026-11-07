@@ -105,9 +105,16 @@ class Store:
         return d
 
     # Posts
-    def save_posts(self, topic_id: int, posts: list[Post]) -> int:
+    def save_posts(self, topic_id: int, posts: list[Post]) -> tuple[int, list[str]]:
+        """Store posts for a topic. Returns (saved, keys of posts the topic didn't have)."""
         now = _now()
         with self.conn:
+            before = {
+                f"{r['platform']}:{r['post_id']}"
+                for r in self.conn.execute(
+                    "SELECT platform, post_id FROM posts WHERE topic_id = ?", (topic_id,)
+                )
+            }
             self.conn.executemany(
                 "INSERT INTO posts(topic_id, platform, post_id, data, created_at, collected_at) "
                 "VALUES (?, ?, ?, ?, ?, ?) "
@@ -126,17 +133,21 @@ class Store:
             )
             self.conn.execute("UPDATE topics SET refreshed_at = ? WHERE id = ?", (now, topic_id))
         self.remember(posts)
-        return len(posts)
+        new_keys = list(dict.fromkeys(p.key for p in posts if p.key not in before))
+        return len(posts), new_keys
 
     def get_posts(
-        self, topic_id: int, platform: str | None = None, limit: int = 100, offset: int = 0
+        self, topic_id: int, platform: str | None = None, limit: int = 100, offset: int = 0,
+        sort: str = "recent",
     ) -> list[Post]:
         sql = "SELECT data FROM posts WHERE topic_id = ?"
         args: list = [topic_id]
         if platform:
             sql += " AND platform = ?"
             args.append(platform)
-        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        # Tie-breakers keep paging stable when times or likes are equal or missing.
+        order = "created_at DESC" if sort == "recent" else "json_extract(data, '$.likes') DESC, created_at DESC"
+        sql += f" ORDER BY {order}, platform, post_id LIMIT ? OFFSET ?"
         args += [limit, offset]
         return [Post.model_validate_json(r["data"]) for r in self.conn.execute(sql, args)]
 

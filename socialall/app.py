@@ -7,6 +7,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -176,8 +177,8 @@ def create_app(
         if not topic:
             raise HTTPException(404, "Topic not found")
         result = await collect(topic["name"], connectors(), limit, topic["platforms"], timeout())
-        saved = state["store"].save_posts(topic_id, result.posts)
-        return {"saved": saved, "errors": result.errors}
+        saved, new_keys = state["store"].save_posts(topic_id, result.posts)
+        return {"saved": saved, "new": len(new_keys), "new_keys": new_keys, "errors": result.errors}
 
     @app.get("/api/topics/{topic_id}/posts", response_model=list[Post])
     def topic_posts(
@@ -185,10 +186,11 @@ def create_app(
         platform: str | None = None,
         limit: int = Query(60, ge=1, le=500),
         offset: int = Query(0, ge=0),
+        sort: Literal["recent", "top"] = "recent",
     ):
         if not state["store"].get_topic(topic_id):
             raise HTTPException(404, "Topic not found")
-        return state["store"].get_posts(topic_id, platform, limit, offset)
+        return state["store"].get_posts(topic_id, platform, limit, offset, sort)
 
     @app.get("/api/favorites", response_model=list[Favorite])
     def list_favorites():

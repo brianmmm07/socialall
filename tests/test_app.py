@@ -22,13 +22,15 @@ def media_handler(request):
 
 @pytest.fixture
 def client(tmp_path):
+    store = Store(":memory:")
     app = create_app(
-        store=Store(":memory:"),
+        store=store,
         client=httpx.AsyncClient(transport=httpx.MockTransport(media_handler)),
         cache_dir=str(tmp_path / "videos"),
     )
     with TestClient(app) as c:
         c.cache_dir = tmp_path / "videos"
+        c.app_store = store
         yield c
 
 
@@ -73,6 +75,31 @@ def test_topic_lifecycle(client):
     assert client.get("/api/topics").json()[0]["post_count"] == 20
     assert client.delete(f"/api/topics/{t['id']}").status_code == 204
     assert client.get("/api/topics").json() == []
+
+
+def test_refresh_reports_new_posts(client):
+    t = client.post("/api/topics", json={"name": "AI agents"}).json()
+    first = client.post(f"/api/topics/{t['id']}/refresh").json()
+    assert first["new"] == 20 and len(first["new_keys"]) == 20
+    assert all(":" in k for k in first["new_keys"])
+    second = client.post(f"/api/topics/{t['id']}/refresh").json()
+    assert second["saved"] == 20 and second["new"] == 0 and second["new_keys"] == []
+
+
+def test_topic_posts_sort_top(client):
+    from datetime import datetime, timezone
+    from socialall.models import Post
+
+    t = client.post("/api/topics", json={"name": "sorting"}).json()
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    posts = [Post(platform="x", id=str(i), likes=l, created_at=when) for i, l in enumerate([5, None, 50, 1])]
+    client.app_store.save_posts(t["id"], posts)
+    url = f"/api/topics/{t['id']}/posts"
+    likes = [p["likes"] for p in client.get(url, params={"sort": "top"}).json()]
+    assert likes == [50, 5, 1, None]
+    paged = [p["id"] for off in range(4) for p in client.get(url, params={"sort": "top", "limit": 1, "offset": off}).json()]
+    assert paged == ["2", "0", "3", "1"]
+    assert client.get(url, params={"sort": "bogus"}).status_code == 422
 
 
 def test_one_platform_failing_does_not_break_search(client, monkeypatch):

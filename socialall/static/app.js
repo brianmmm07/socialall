@@ -3,6 +3,8 @@
 const PLATFORMS = { x: "X", instagram: "Instagram", xiaohongshu: "Xiaohongshu", tiktok: "TikTok", linkedin: "LinkedIn" };
 const PAGE = 60;
 const $ = (id) => document.getElementById(id);
+const stored = (k, fallback) => { try { return localStorage.getItem(k) ?? fallback; } catch { return fallback; } };
+const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 const state = {
   view: "home",        // home | search | topic | favorites
@@ -12,6 +14,8 @@ const state = {
   favs: new Map(),     // key -> favourite record (cache status etc.)
   hiddenPlatforms: new Set(),
   kind: "all",
+  sort: stored("sort", "recent") === "top" ? "top" : "recent",  // topic view only
+  newKeys: new Set(),  // posts that arrived in the last refresh of this topic
   offset: 0,
   hasMore: false,
   viewerIndex: -1,
@@ -94,7 +98,7 @@ function tileHtml(p, i) {
     </div>`;
   }
   const meta = `<div class="meta">${hasMedia ? "" : `<span class="dot" data-p="${esc(p.platform)}"></span>`}
-      <span class="who">${esc(p.author || label)}</span><span class="when">${esc(ago(p.created_at))}</span></div>`;
+      <span class="who">${esc(p.author || label)}</span>${state.newKeys.has(key) ? `<span class="new">New</span>` : ""}<span class="when">${esc(ago(p.created_at))}</span></div>`;
   return `<article class="tile${hasMedia ? "" : " text-only"}" data-i="${i}" data-p="${esc(p.platform)}" data-kind="${p.media_type}">
     <button class="fav" type="button" data-act="fav" aria-pressed="${!!fav}" aria-label="${fav ? "Remove from favourites" : "Add to favourites"}">${icon("star")}</button>
     <button class="tile-open" type="button" data-act="open" aria-label="Open ${esc(label)} post">
@@ -151,6 +155,7 @@ function renderChips() {
   for (const p of state.posts) counts[p.platform] = (counts[p.platform] || 0) + 1;
   const present = Object.keys(PLATFORMS).filter((k) => counts[k]);
   $("filters").hidden = !state.posts.length;
+  $("sort").hidden = state.view !== "topic";
   $("chips").innerHTML = present.map((k) =>
     `<button class="chip" type="button" data-p="${k}" aria-pressed="${!state.hiddenPlatforms.has(k)}"><span class="dot"></span>${PLATFORMS[k]}<span class="n">${counts[k]}</span></button>`).join("");
 }
@@ -185,7 +190,7 @@ async function runSearch(q, fresh = false) {
   if (!q) return;
   state.searchAbort?.abort();
   const ctrl = (state.searchAbort = new AbortController());
-  Object.assign(state, { view: "search", query: q, topic: null, offset: 0, hasMore: false });
+  Object.assign(state, { view: "search", query: q, topic: null, offset: 0, hasMore: false, newKeys: new Set() });
   $("q").value = q;
   $("save").disabled = false;
   markNav();
@@ -213,18 +218,35 @@ function summary(posts) {
 
 async function openTopic(t) {
   state.searchAbort?.abort();
-  Object.assign(state, { view: "topic", topic: t, query: t.name, offset: 0 });
+  Object.assign(state, { view: "topic", topic: t, query: t.name, offset: 0, newKeys: new Set() });
   $("q").value = t.name;
   $("save").disabled = true;
   markNav();
   setHeader(t.name, "Loading saved posts…", true);
   showErrors();
   skeleton();
-  const posts = await api(`/api/topics/${t.id}/posts?limit=${PAGE}`);
+  const posts = await api(postsUrl(t.id));
+  if (state.view !== "topic" || state.topic.id !== t.id) return;
   if (!posts.length) return refreshTopic();
   state.posts = posts;
   state.hasMore = posts.length === PAGE;
   setHeader(t.name, topicSub(t), true);
+  renderFeed();
+}
+
+const postsUrl = (id, offset = 0) => `/api/topics/${id}/posts?limit=${PAGE}&offset=${offset}&sort=${state.sort}`;
+
+async function setSort(sort) {
+  if (sort === state.sort) return;
+  state.sort = sort;
+  store("sort", sort);
+  for (const x of $("sort").children) x.setAttribute("aria-pressed", String(x.dataset.sort === sort));
+  if (state.view !== "topic") return;
+  const t = state.topic;
+  const posts = await api(postsUrl(t.id));
+  if (state.view !== "topic" || state.topic.id !== t.id || state.sort !== sort) return;
+  state.posts = posts;
+  state.hasMore = posts.length === PAGE;
   renderFeed();
 }
 
@@ -236,7 +258,7 @@ async function loadMore() {
   if (state.view !== "topic") return;
   const btn = $("more-btn");
   btn.disabled = true;
-  const next = await api(`/api/topics/${state.topic.id}/posts?limit=${PAGE}&offset=${state.posts.length}`);
+  const next = await api(postsUrl(state.topic.id, state.posts.length));
   state.posts.push(...next);
   state.hasMore = next.length === PAGE;
   btn.disabled = false;
@@ -250,11 +272,15 @@ async function refreshTopic() {
   try {
     if (state.view === "search") return await runSearch(state.query, true);
     const t = state.topic;
-    if (!state.posts.length) skeleton();
+    const first = !state.posts.length;
+    if (first) skeleton();
     const r = await api(`/api/topics/${t.id}/refresh`, { method: "POST" });
-    const posts = await api(`/api/topics/${t.id}/posts?limit=${PAGE}`);
+    const posts = await api(postsUrl(t.id));
     if (state.view !== "topic" || state.topic.id !== t.id) return;
     state.posts = posts;
+    // On the first fill every post is new, so labels would be noise.
+    state.newKeys = first ? new Set() : new Set(r.new_keys);
+    toast(first ? `Saved ${r.saved} post${r.saved === 1 ? "" : "s"}` : r.new ? `${r.new} new post${r.new === 1 ? "" : "s"}` : "No new posts");
     state.hasMore = posts.length === PAGE;
     const topics = await loadTopics();
     state.topic = topics.find((x) => x.id === t.id) || t;
@@ -271,7 +297,7 @@ async function refreshTopic() {
 
 async function openFavorites() {
   state.searchAbort?.abort();
-  Object.assign(state, { view: "favorites", topic: null, hasMore: false });
+  Object.assign(state, { view: "favorites", topic: null, hasMore: false, newKeys: new Set() });
   $("save").disabled = true;
   markNav();
   showErrors();
@@ -387,9 +413,7 @@ function openViewer(i) {
 }
 
 function closeViewer() {
-  $("stage").innerHTML = ""; // stops playback and frees the video
-  state.viewerIndex = -1;
-  if (viewer.open) viewer.close();
+  if (viewer.open) viewer.close(); // the close handler stops playback and frees the video
 }
 
 function stepPost(dir) {
@@ -546,6 +570,10 @@ $("chips").addEventListener("click", (e) => {
   c.setAttribute("aria-pressed", String(!state.hiddenPlatforms.has(k)));
   applyFilters();
 });
+$("sort").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-sort]");
+  if (b) setSort(b.dataset.sort);
+});
 $("kind").addEventListener("click", (e) => {
   const b = e.target.closest("[data-kind]");
   if (!b) return;
@@ -569,7 +597,14 @@ viewer.addEventListener("click", (e) => {
   if (act === "fav") toggleFav(p);
   else if (act === "retry") retry(p);
 });
-viewer.addEventListener("close", () => { $("stage").innerHTML = ""; state.viewerIndex = -1; });
+viewer.addEventListener("close", () => {
+  const last = state.viewerIndex;
+  $("stage").innerHTML = "";
+  state.viewerIndex = -1;
+  // j/k in the viewer moves between posts, so return focus to the last one viewed.
+  tileAt(last)?.querySelector(".tile-open")?.focus({ preventScroll: true });
+  tileAt(last)?.scrollIntoView({ block: "nearest" });
+});
 
 document.addEventListener("keydown", (e) => {
   if (viewer.open) {
@@ -587,8 +622,30 @@ document.addEventListener("keydown", (e) => {
     else if (e.key === "f") toggleFav(p);
     return;
   }
-  if (e.key === "/" && document.activeElement !== $("q")) { e.preventDefault(); $("q").focus(); }
+  if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+  if (e.key === "/") { e.preventDefault(); $("q").focus(); }
+  else if (e.key === "j" || e.key === "k") { focusTile(e.key === "j" ? 1 : -1); e.preventDefault(); }
+  else if (e.key === "f") {
+    const tile = document.activeElement?.closest?.("#feed .tile");
+    if (tile) toggleFav(state.posts[+tile.dataset.i]);
+  }
 });
+
+const isTyping = (el) => el?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName);
+const tileAt = (i) => (i >= 0 ? $("feed").querySelector(`.tile[data-i="${i}"]`) : null);
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
+/* j/k scan the feed: focus moves across visible tiles; Enter opens, f stars. */
+function focusTile(dir) {
+  const order = visibleIndexes();
+  if (!order.length) return;
+  const cur = document.activeElement?.closest?.("#feed .tile");
+  const at = cur && !cur.hidden ? order.indexOf(+cur.dataset.i) : -1;
+  const next = at < 0 ? order[0] : order[Math.min(order.length - 1, Math.max(0, at + dir))];
+  const el = tileAt(next);
+  el.querySelector(".tile-open").focus({ preventScroll: true });
+  el.scrollIntoView({ block: "nearest", behavior: reduceMotion.matches ? "auto" : "smooth" });
+}
 document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(); });
 
 function goHome() {
@@ -599,5 +656,6 @@ function goHome() {
 }
 
 /* ---------- boot ---------- */
+for (const x of $("sort").children) x.setAttribute("aria-pressed", String(x.dataset.sort === state.sort));
 goHome();
 Promise.all([loadTopics(), loadFavorites(), loadSources(), loadStorage()]).catch((e) => toast(e.message));
