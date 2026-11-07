@@ -19,10 +19,9 @@ class LinkedInConnector(Connector):
     label = "LinkedIn"
     required_env = ["LINKEDIN_ACCESS_TOKEN", "LINKEDIN_AUTHOR_URNS"]
     notes = (
-        "Official LinkedIn Posts API (Community Management). LinkedIn offers no "
-        "public keyword search, so this reads posts from the authors listed in "
-        "LINKEDIN_AUTHOR_URNS (comma separated, e.g. urn:li:organization:1234) "
-        "and filters them by topic. Needs an OAuth token with r_organization_social."
+        "LinkedIn's own API is only for companies LinkedIn approves (Community Management API), "
+        "and it can't search by keyword: it only reads the organizations you list. Most people "
+        "should use the one-key setup at the top instead."
     )
     base_url = "https://api.linkedin.com/rest"
     docs_url = "https://www.linkedin.com/developers/apps"

@@ -21,10 +21,9 @@ class InstagramConnector(Connector):
     label = "Instagram"
     required_env = ["INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_USER_ID"]
     notes = (
-        "Official Instagram Graph API (hashtag search). Needs a Meta app, an "
-        "Instagram Business or Creator account linked to a Facebook Page, a "
-        "long-lived access token, and that account's IG user id. Limited to 30 "
-        "unique hashtags per 7 days."
+        "Instagram's own API (hashtag search). It needs an Instagram Business or Creator "
+        "account linked to a Facebook Page, and a Meta developer app of your own. Limited to "
+        "30 different hashtags a week."
     )
 
     docs_url = "https://developers.facebook.com/apps/"

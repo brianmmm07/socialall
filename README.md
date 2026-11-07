@@ -22,10 +22,9 @@ UI, through a JSON API, or from the command line.
 It runs with no API keys at all: until you connect a platform it shows sample
 ("demo") posts so you can try the app.
 
-- **Connect accounts in the app.** Open **Accounts** in the sidebar. X, Instagram
-  (through Meta) and LinkedIn have **Sign in** buttons; TikTok and Xiaohongshu
-  take their keys in a short form. Each platform shows whether it's connected and
-  as whom, and **Test** checks the keys with one cheap call.
+- **Connect in the app.** Open **Accounts** in the sidebar. The easiest way is
+  one [SocialCrawl](https://www.socialcrawl.dev/) key, which searches all five
+  platforms (free to start, no card). You can also use each platform's own API.
 
 ## Quick start
 
@@ -97,6 +96,29 @@ favourites are kept but play online only.
 
 Open **Accounts** in the sidebar (or click a source under Sources).
 
+### Easiest: one key for all five
+
+The platforms' own APIs are mostly closed to individuals: TikTok's is for
+approved academic researchers, LinkedIn's for approved companies and has no
+keyword search, Xiaohongshu has none, and X is prepaid. So SocialAll can search
+all five through [SocialCrawl](https://www.socialcrawl.dev/), a search service
+that needs no accounts on the platforms:
+
+1. Make a free account at socialcrawl.dev (100 credits, no card).
+2. In its dashboard, open **API Keys** and copy your key.
+3. Paste it into the top card on the Accounts page and press **Save and test**.
+   The test is a dry run and spends no credits.
+
+Searches cost credits: 1 for X, Instagram and TikTok, 5 for LinkedIn, and 5 per
+note on Xiaohongshu (SocialAll asks for 10), so about 58 for all five. Untick a
+platform in the card to skip it. Paid credits are about £15 for 2,500 and don't
+expire. A platform you connect with its own API (below) uses that instead.
+SocialCrawl collects public posts without the platforms' permission, and it sees
+what you search for. The `.env` names are `SOCIALCRAWL_API_KEY` and
+`SOCIALCRAWL_PLATFORMS` (comma separated).
+
+### Each platform's own API
+
 - **Sign in (OAuth)** for X, Instagram and LinkedIn. These platforms only let a
   *developer app* sign people in, so you create a free app on the platform's
   developer site once: paste its ID and secret into the card, add the callback
@@ -143,7 +165,7 @@ missing keys is skipped, and if one platform fails the others still return.
 
 | Platform | How it gets content | What you need |
 | --- | --- | --- |
-| **X** | Official API v2 recent search (last 7 days) | Sign in with X, or `X_BEARER_TOKEN` from developer.x.com. Either way the app needs a plan that includes search (Basic or higher, paid) |
+| **X** | Official API v2 recent search (last 7 days) | An app at [console.x.com](https://console.x.com) with prepaid credits (about $0.005 per post read; the free and Basic plans are closed to new developers). Sign in with X, or `X_BEARER_TOKEN` |
 | **Instagram** | Official Graph API hashtag search. The topic becomes a hashtag ("machine learning" → `#machinelearning`) | A Meta app and an Instagram Business or Creator account linked to a Facebook Page. Sign in with Facebook finds the account for you; or set a long-lived `INSTAGRAM_ACCESS_TOKEN` with `instagram_basic` and `INSTAGRAM_USER_ID`. Limit: 30 unique hashtags per 7 days |
 | **TikTok** | Official Research API keyword query (last 30 days) | `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` from an **approved** Research API application. Access is mostly limited to academic researchers |
 | **LinkedIn** | Official Posts API. LinkedIn has no public keyword search, so it reads posts from the authors you list and keeps the ones that mention the topic | Sign in with LinkedIn (an app with the Community Management API, `r_organization_social`) or `LINKEDIN_ACCESS_TOKEN`, plus `LINKEDIN_AUTHOR_URNS`, e.g. `urn:li:organization:12345` |

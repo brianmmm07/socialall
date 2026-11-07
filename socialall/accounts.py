@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from . import credentials
-from .connectors import CONNECTORS, Connector, ConnectorError
+from .connectors import CONNECTORS, Connector, ConnectorError, socialcrawl
 from .connectors.base import Field
 
 TEST_TIMEOUT = 20
@@ -90,12 +90,16 @@ def describe(connector: Connector, request: Request) -> dict:
             "steps": spec.steps,
             "app_fields": app_fields,
         }
+    via = "socialcrawl" if not configured and socialcrawl.covers(connector.name) else None
     return {
         "name": connector.name,
         "label": connector.label,
         "notes": connector.notes,
         "docs_url": connector.docs_url,
-        "connected": configured,
+        "connected": configured or via is not None,
+        # "socialcrawl" when the one-key service covers it and the platform's own keys aren't set.
+        "via": via,
+        "official": configured,
         # Where the working keys come from: the app (keychain), .env, or both.
         "source": ("app" if sources == {"app"} else "env" if sources == {"env"} else "mixed") if configured else None,
         "method": meta.get("method"),
@@ -104,6 +108,27 @@ def describe(connector: Connector, request: Request) -> dict:
         "test": {k: meta[k] for k in ("ok", "message", "at") if k in meta} or None,
         "fields": [_field_status(f) for f in connector.fields],
         "oauth": oauth,
+    }
+
+
+def describe_provider() -> dict:
+    store = credentials.store()
+    meta = store.meta("socialcrawl")
+    enabled = socialcrawl.enabled_platforms()
+    labels = {cls.name: cls.label for cls in CONNECTORS}
+    return {
+        "name": "socialcrawl",
+        "label": "SocialCrawl",
+        "connected": bool(socialcrawl.api_key()),
+        "account": meta.get("account") if socialcrawl.api_key() else None,
+        "test": {k: meta[k] for k in ("ok", "message", "at") if k in meta} or None,
+        "fields": [_field_status(f) for f in socialcrawl.FIELDS],
+        "signup_url": "https://www.socialcrawl.dev/",
+        "keys_url": "https://www.socialcrawl.dev/dashboard",
+        "platforms": [
+            {"name": n, "label": labels[n], "enabled": n in enabled, "cost": socialcrawl.ENDPOINTS[n][3]}
+            for n in socialcrawl.ALL
+        ],
     }
 
 
@@ -166,8 +191,52 @@ def accounts_router(client: Callable[[], httpx.AsyncClient], on_change: Callable
     def list_accounts(request: Request):
         return {
             "store": credentials.store().label,
+            "provider": describe_provider(),
             "platforms": [describe(cls(), request) for cls in CONNECTORS],
         }
+
+    # ---------- the one-key service (registered before /{name} so it wins) ----------
+    @router.put("/socialcrawl")
+    def save_provider(body: AccountValues, request: Request):
+        same_origin(request)
+        allowed = {socialcrawl.KEY, socialcrawl.PLATFORMS_KEY}
+        if unknown := sorted(set(body.values) - allowed):
+            raise HTTPException(422, f"SocialCrawl doesn't use {', '.join(unknown)}")
+        values = {k: (v.strip() if isinstance(v, str) else None) for k, v in body.values.items()}
+        if socialcrawl.PLATFORMS_KEY in values:
+            picked = [p for p in (values[socialcrawl.PLATFORMS_KEY] or "").split(",") if p in socialcrawl.ALL]
+            # Keep the setting even when empty ("none"), so an empty list doesn't mean "all".
+            values[socialcrawl.PLATFORMS_KEY] = ",".join(picked) or ","
+        credentials.store().update(values)
+        if socialcrawl.KEY in values:
+            credentials.store().set_meta("socialcrawl", account=None, ok=None, message=None, at=None)
+        on_change()
+        return describe_provider()
+
+    @router.post("/socialcrawl/test")
+    async def test_provider(request: Request):
+        same_origin(request)
+        store, now = credentials.store(), int(time.time())
+        if not socialcrawl.api_key():
+            result = {"ok": False, "message": "Paste your SocialCrawl API key first"}
+        else:
+            try:
+                account = await asyncio.wait_for(socialcrawl.verify(client()), TEST_TIMEOUT)
+                result = {"ok": True, "message": "Working", "account": account}
+            except Exception as e:  # any failure becomes a message on the card
+                result = {"ok": False, "message": readable(e).replace("The platform rejected", "SocialCrawl rejected")}
+        store.set_meta("socialcrawl", ok=result["ok"], message=result["message"], at=now,
+                       account=result.get("account"))
+        on_change()
+        return {**result, "provider": describe_provider()}
+
+    @router.delete("/socialcrawl")
+    def disconnect_provider(request: Request):
+        same_origin(request)
+        credentials.store().update({socialcrawl.KEY: None, socialcrawl.PLATFORMS_KEY: None})
+        credentials.store().clear_meta("socialcrawl")
+        on_change()
+        return describe_provider()
 
     @router.put("/{name}")
     def save(name: str, body: AccountValues, request: Request):

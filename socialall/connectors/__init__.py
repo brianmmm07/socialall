@@ -7,6 +7,7 @@ from .base import Connector, ConnectorError
 from .demo import DemoConnector
 from .instagram import InstagramConnector
 from .linkedin import LinkedInConnector
+from .socialcrawl import SocialCrawlConnector, covers
 from .tiktok import TikTokConnector
 from .x import XConnector
 from .xiaohongshu import XiaohongshuConnector
@@ -26,8 +27,17 @@ def all_connectors(client: httpx.AsyncClient | None = None) -> list[Connector]:
 
 
 def active_connectors(client: httpx.AsyncClient | None = None) -> list[Connector]:
-    """Configured platforms, plus demo data when enabled."""
-    active = [c for c in all_connectors(client) if c.is_configured()]
+    """Configured platforms, plus demo data when enabled.
+
+    A platform with its own keys uses its official API; otherwise SocialCrawl
+    searches it when that key is set.
+    """
+    active: list[Connector] = []
+    for c in all_connectors(client):
+        if c.is_configured():
+            active.append(c)
+        elif covers(c.name):
+            active.append(SocialCrawlConnector(c.name, c.label, client))
     mode = demo_mode()
     if mode == "on" or (mode == "auto" and not active):
         active.append(DemoConnector(client))
@@ -39,6 +49,7 @@ __all__ = [
     "Connector",
     "ConnectorError",
     "DemoConnector",
+    "SocialCrawlConnector",
     "active_connectors",
     "all_connectors",
 ]

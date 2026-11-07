@@ -14,9 +14,9 @@ class TikTokConnector(Connector):
     label = "TikTok"
     required_env = ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"]
     notes = (
-        "Official TikTok Research API. Needs an approved Research API "
-        "application (developers.tiktok.com); access is limited to eligible "
-        "researchers and some commercial partners. Uses client-credentials auth."
+        "TikTok's own Research API is only for approved academic researchers, so most people "
+        "can't get these keys. Use the one-key setup at the top instead. If you do have "
+        "Research API access, paste its client key and secret here."
     )
     base_url = "https://open.tiktokapis.com/v2"
     docs_url = "https://developers.tiktok.com/products/research-api/"

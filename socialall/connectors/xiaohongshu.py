@@ -23,9 +23,8 @@ class XiaohongshuConnector(Connector):
     label = "Xiaohongshu"
     required_env = ["XHS_BRIDGE_URL"]
     notes = (
-        "No official search API exists. Point XHS_BRIDGE_URL at a service that "
-        "returns notes for a keyword (see README for the JSON contract). "
-        "Optional XHS_BRIDGE_TOKEN is sent as a Bearer token."
+        "Xiaohongshu has no public API. Use the one-key setup at the top, or, if you run "
+        "your own scraper service, point SocialAll at it here (the README has the JSON it must return)."
     )
 
     fields = [
