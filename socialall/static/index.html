@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SocialAll</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1b1d21; --muted: #6b7280; --border: #e5e7eb;
+    --accent: #2563eb;
+    --x: #111; --instagram: #c13584; --xiaohongshu: #ff2442; --tiktok: #00a3a8; --linkedin: #0a66c2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --panel: #1b1e24; --text: #e8eaed; --muted: #9aa0a6; --border: #2c3038; --x: #e8eaed; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0 12px 0 0; }
+  form#search { display: flex; gap: 8px; flex: 1; min-width: 260px; }
+  input[type=text] { flex: 1; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 9px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .layout { display: grid; grid-template-columns: 260px 1fr; gap: 20px; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; padding: 16px; } }
+  aside section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  .topic { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  .topic:hover, .topic.active { background: var(--bg); }
+  .topic small { color: var(--muted); }
+  .topic .del { border: 0; background: none; color: var(--muted); padding: 0 4px; }
+  .plat { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; }
+  .ok { color: #16a34a; } .no { color: var(--muted); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 13px; cursor: pointer; user-select: none; }
+  .chip.on { background: var(--text); color: var(--panel); border-color: var(--text); }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar h2 { margin: 0; font-size: 20px; }
+  .feed { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 8px; border-top: 3px solid var(--c, var(--border)); }
+  .card img { width: 100%; border-radius: 6px; max-height: 260px; object-fit: cover; }
+  .meta { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+  .badge { font-weight: 600; color: var(--c); }
+  .text { white-space: pre-wrap; word-break: break-word; }
+  .stats { font-size: 13px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+  .errors { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>SocialAll</h1>
+  <form id="search">
+    <input type="text" id="q" placeholder="Search a topic, e.g. AI agents" autocomplete="off" required>
+    <button class="primary" type="submit">Search</button>
+    <button type="button" id="save">Save topic</button>
+  </form>
+</header>
+<div class="layout">
+  <aside>
+    <section><h2>Saved topics</h2><div id="topics"><div class="no">None yet</div></div></section>
+    <section><h2>Platforms</h2><div id="platforms"></div></section>
+  </aside>
+  <main>
+    <div class="chips" id="chips"></div>
+    <div class="toolbar"><h2 id="title">Search a topic to start</h2><button id="refresh" hidden>Refresh</button></div>
+    <div id="errors"></div>
+    <div class="feed" id="feed"></div>
+  </main>
+</div>
+<script>
+const PLATFORMS = { x: "X", instagram: "Instagram", xiaohongshu: "Xiaohongshu", tiktok: "TikTok", linkedin: "LinkedIn" };
+const selected = new Set(Object.keys(PLATFORMS));
+let current = { mode: null, topic: null };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const num = (n) => n == null ? null : Intl.NumberFormat(undefined, { notation: "compact" }).format(n);
+const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (!res.ok) throw new Error((await res.text()) || res.statusText);
+  return res.status === 204 ? null : res.json();
+}
+
+function renderChips() {
+  $("chips").innerHTML = Object.entries(PLATFORMS).map(([k, v]) =>
+    `<span class="chip ${selected.has(k) ? "on" : ""}" data-k="${k}">${v}</span>`).join("");
+  $("chips").querySelectorAll(".chip").forEach((el) => el.onclick = () => {
+    const k = el.dataset.k;
+    selected.has(k) ? selected.delete(k) : selected.add(k);
+    if (!selected.size) selected.add(k);
+    renderChips();
+    rerun();
+  });
+}
+
+function renderPosts(posts, errors = {}) {
+  $("errors").innerHTML = Object.keys(errors).length
+    ? `<div class="errors">${Object.entries(errors).map(([k, v]) => `<div><b>${esc(PLATFORMS[k] || k)}</b>: ${esc(v)}</div>`).join("")}</div>` : "";
+  const shown = posts.filter((p) => selected.has(p.platform));
+  if (!shown.length) { $("feed").innerHTML = `<div class="empty">No posts found.</div>`; return; }
+  $("feed").innerHTML = shown.map((p) => {
+    const url = safeUrl(p.url), img = safeUrl(p.media_url);
+    const when = p.created_at ? new Date(p.created_at).toLocaleString() : "";
+    const stats = [["♥", p.likes], ["💬", p.comments], ["↻", p.shares], ["👁", p.views]]
+      .filter(([, v]) => v != null).map(([i, v]) => `<span>${i} ${num(v)}</span>`).join("");
+    return `<article class="card" style="--c: var(--${esc(p.platform)})">
+      <div class="meta"><span class="badge">${esc(PLATFORMS[p.platform] || p.platform)}</span><span>${esc(when)}</span></div>
+      ${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : ""}
+      <div class="text">${esc(p.text)}</div>
+      <div class="meta"><span>${esc(p.author || "")}</span>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">Open</a>` : ""}</div>
+      ${stats ? `<div class="stats">${stats}</div>` : ""}
+    </article>`;
+  }).join("");
+}
+
+async function search(q) {
+  current = { mode: "search", topic: q };
+  $("title").textContent = `Results for "${q}"`;
+  $("refresh").hidden = true;
+  $("feed").innerHTML = `<div class="empty">Searching…</div>`;
+  try {
+    const r = await api(`/api/search?q=${encodeURIComponent(q)}&platforms=${[...selected].join(",")}`);
+    renderPosts(r.posts, r.errors);
+  } catch (e) { $("feed").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function openTopic(t) {
+  current = { mode: "topic", topic: t };
+  $("title").textContent = t.name;
+  $("refresh").hidden = false;
+  $("errors").innerHTML = "";
+  const posts = await api(`/api/topics/${t.id}/posts`);
+  if (!posts.length) return refreshTopic();
+  renderPosts(posts);
+  loadTopics();
+}
+
+async function refreshTopic() {
+  const t = current.topic;
+  $("feed").innerHTML = `<div class="empty">Collecting…</div>`;
+  const r = await api(`/api/topics/${t.id}/refresh`, { method: "POST" });
+  renderPosts(await api(`/api/topics/${t.id}/posts`), r.errors);
+  loadTopics();
+}
+
+function rerun() {
+  if (current.mode === "search") search(current.topic);
+  else if (current.mode === "topic") openTopic(current.topic);
+}
+
+async function loadTopics() {
+  const topics = await api("/api/topics");
+  $("topics").innerHTML = topics.length ? "" : `<div class="no">None yet</div>`;
+  topics.forEach((t) => {
+    const row = document.createElement("div");
+    row.className = "topic" + (current.mode === "topic" && current.topic.id === t.id ? " active" : "");
+    row.innerHTML = `<span>${esc(t.name)} <small>${t.post_count}</small></span><button class="del" title="Delete">✕</button>`;
+    row.onclick = () => openTopic(t);
+    row.querySelector(".del").onclick = async (e) => {
+      e.stopPropagation();
+      await api(`/api/topics/${t.id}`, { method: "DELETE" });
+      loadTopics();
+    };
+    $("topics").appendChild(row);
+  });
+}
+
+async function loadPlatforms() {
+  const list = await api("/api/platforms");
+  $("platforms").innerHTML = list.map((p) =>
+    `<div class="plat" title="${esc(p.notes)}"><span>${esc(p.label)}</span><span class="${p.configured ? "ok" : "no"}">${p.configured ? "ready" : "needs keys"}</span></div>`).join("");
+}
+
+$("search").onsubmit = (e) => { e.preventDefault(); search($("q").value.trim()); };
+$("save").onclick = async () => {
+  const name = $("q").value.trim();
+  if (!name) return;
+  const t = await api("/api/topics", { method: "POST", body: JSON.stringify({ name }) });
+  await loadTopics();
+  openTopic(t);
+};
+$("refresh").onclick = refreshTopic;
+
+renderChips();
+loadTopics();
+loadPlatforms();
+</script>
+</body>
+</html>
