@@ -20,10 +20,14 @@ from .. import credentials
 from ..models import Post
 from .base import Connector, ConnectorError, Field, parse_time
 
+NAME, LABEL = "socialcrawl", "SocialCrawl"
 BASE_URL = "https://www.socialcrawl.dev/v1"
+SIGNUP_URL = "https://www.socialcrawl.dev/"
+KEYS_URL = "https://www.socialcrawl.dev/dashboard"
 KEY = "SOCIALCRAWL_API_KEY"
 PLATFORMS_KEY = "SOCIALCRAWL_PLATFORMS"
 ALL = ["x", "instagram", "xiaohongshu", "tiktok", "linkedin"]
+DEFAULT_PLATFORMS = list(ALL)
 
 # Our platform name -> (endpoint, query parameter, extra parameters, rough credits per search)
 ENDPOINTS: dict[str, tuple[str, str, dict, str]] = {
@@ -35,6 +39,7 @@ ENDPOINTS: dict[str, tuple[str, str, dict, str]] = {
     "xiaohongshu": ("/xiaohongshu/search", "query", {}, "5 credits a note"),
 }
 XHS_MAX = 10
+COSTS = {name: spec[3] for name, spec in ENDPOINTS.items()}
 
 FIELDS = [
     Field(KEY, "SocialCrawl API key", placeholder="sc_…",
@@ -50,7 +55,7 @@ def enabled_platforms() -> list[str]:
     """Platforms that should search through SocialCrawl (all five unless narrowed)."""
     raw = credentials.setting(PLATFORMS_KEY)
     if raw is None:
-        return list(ALL)
+        return list(DEFAULT_PLATFORMS)
     return [p for p in (x.strip() for x in raw.split(",")) if p in ALL]
 
 
@@ -168,3 +173,7 @@ async def verify(client) -> str:
     data = await call(client, ENDPOINTS["x"][0], {"query": "test", "dry_run": "true"})
     left = data.get("credits_remaining")
     return f"{int(left):,} credits left" if isinstance(left, (int, float)) else "Key accepted"
+
+
+def make(platform: str, label: str, client=None) -> Connector:
+    return SocialCrawlConnector(platform, label, client)

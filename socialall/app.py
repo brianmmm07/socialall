@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from . import config, export
 from .accounts import accounts_router
 from .aggregator import collect
-from .connectors import DemoConnector, active_connectors, all_connectors, socialcrawl
+from .connectors import DemoConnector, active_connectors, all_connectors, provider_for
 from .models import Favorite, PlatformStatus, Post, SearchResult
 from .storage import Store
 from .video_cache import CacheError, VideoCache, favorite_stems
@@ -164,11 +164,11 @@ def create_app(
 
     @app.get("/api/platforms", response_model=list[PlatformStatus])
     def platforms():
-        statuses = [
-            c.status().model_copy(update={"configured": True, "via": "socialcrawl"})
-            if not c.is_configured() and socialcrawl.covers(c.name) else c.status()
-            for c in all_connectors()
-        ]
+        statuses = []
+        for c in all_connectors():
+            provider = None if c.is_configured() else provider_for(c.name)
+            status = c.status()
+            statuses.append(status.model_copy(update={"configured": True, "via": provider.NAME}) if provider else status)
         if any(c.name == "demo" for c in connectors()):
             statuses.append(DemoConnector().status().model_copy(update={"configured": True}))
         return statuses

@@ -628,7 +628,7 @@ async function loadStorage() {
 }
 
 /* ---------- accounts ---------- */
-const accts = { list: [], provider: null, open: new Set(), busy: new Set() };
+const accts = { list: [], providers: [], open: new Set(), busy: new Set() };
 
 async function openAccounts(nav = "push", focus = null) {
   state.searchAbort?.abort();
@@ -655,7 +655,7 @@ async function loadAccounts() {
   try {
     const r = await api("/api/accounts");
     accts.list = r.platforms;
-    accts.provider = r.provider;
+    accts.providers = r.providers;
     const n = r.platforms.filter((p) => p.connected).length;
     $("acct-intro").innerHTML = `${icon("lock")}<span>Keys and sign-ins are saved in ${esc(r.store)}, never in the page. Keys in <code>.env</code> still work for any platform you don't set up here.</span>`;
     setHeader("Accounts", `${n} of ${r.platforms.length} platforms connected`);
@@ -664,10 +664,11 @@ async function loadAccounts() {
 }
 
 function statusHtml(p) {
-  if (p.via === "socialcrawl") {
-    const t = accts.provider?.test;
-    return t && !t.ok ? `<p class="acct-status bad">${icon("alert")}<span>Through SocialCrawl, which isn't working: ${esc(t.message)}</span></p>`
-      : `<p class="acct-status ok">${icon("check")}<span>Searching through SocialCrawl</span></p>`;
+  if (p.via) {
+    const v = accts.providers.find((x) => x.name === p.via);
+    const t = v?.test;
+    return t && !t.ok ? `<p class="acct-status bad">${icon("alert")}<span>Through ${esc(v.label)}, which isn't working: ${esc(t.message)}</span></p>`
+      : `<p class="acct-status ok">${icon("check")}<span>Searching through ${esc(v?.label || p.via)}</span></p>`;
   }
   const src = p.source === "env" ? ` <span class="src">· from .env</span>` : p.source === "mixed" ? ` <span class="src">· app and .env</span>` : "";
   const exp = p.expires_in_days != null && p.expires_in_days < 14 ? ` · sign-in expires in ${p.expires_in_days} day${p.expires_in_days === 1 ? "" : "s"}` : "";
@@ -734,46 +735,76 @@ function accountHtml(p) {
   </article>`;
 }
 
-const XHS_NOTES = 10; // Xiaohongshu searches ask for this many notes (5 credits each)
-const costOf = (name) => ({ linkedin: 5, xiaohongshu: 5 * XHS_NOTES }[name] || 1);
+/* One-key services. Apify is free ($5 of usage a month); SocialCrawl is paid with a free trial. */
+const PROVIDER_UI = {
+  apify: {
+    tag: "Free", title: "Free: one Apify key",
+    lead: "Apify runs public-post scrapers for you. Its free plan gives $5 of usage every month with no card, and when that's used up searches pause until next month. You're never charged. None of your social accounts are used.",
+    steps: (v) => [
+      `Make a free account at <a href="${esc(v.signup_url)}" target="_blank" rel="noopener">apify.com</a> (Google sign-in works). No card needed.`,
+      `Open <b>Settings → API &amp; Integrations</b> and copy your <b>Personal API token</b>.`,
+      `Paste it here and press <b>Save and test</b>.`,
+    ],
+    keysLink: "Open Apify settings",
+    cost: { x: 0.01, instagram: 0.03, tiktok: 0.03, linkedin: 0.02, xiaohongshu: 0.06 },
+    estimate: (n) => n ? `One search across these uses about <b>$${n.toFixed(2)}</b> of your free $5, so roughly <b>${Math.floor(5 / n)} searches a month</b>. Each platform asks for 10 posts, and results take up to a minute because a scraper runs for each one.` : "Tick at least one platform.",
+    extra: "Xiaohongshu starts off: Apify's scrapers for it need a paid plan. Repeat searches within 5 minutes are free.",
+    fine: "The scrapers come from different authors in the Apify Store and collect public posts without the platforms' permission. If one stops working, tell Claude and it can switch to another.",
+    openByDefault: true,
+  },
+  socialcrawl: {
+    tag: "Paid", title: "SocialCrawl: one key, all five (paid)",
+    lead: "A paid search service with 100 free credits to try. Use it if you need Xiaohongshu or more searches than Apify's free allowance.",
+    steps: (v) => [
+      `Make an account at <a href="${esc(v.signup_url)}" target="_blank" rel="noopener">socialcrawl.dev</a> (100 free credits, no card).`,
+      `In its dashboard, open <b>API Keys</b> and copy your key.`,
+      `Paste it here and press <b>Save and test</b>.`,
+    ],
+    keysLink: "Open the SocialCrawl dashboard",
+    cost: { x: 1, instagram: 1, tiktok: 1, linkedin: 5, xiaohongshu: 50 },
+    estimate: (n) => `One search across these uses about <b>${n} credit${n === 1 ? "" : "s"}</b> (Xiaohongshu is 5 per note, 10 notes). After the free 100, credits are about £15 for 2,500.`,
+    extra: "",
+    fine: "SocialCrawl collects public posts without the platforms' permission, and it can see what you search for.",
+    openByDefault: false,
+  },
+};
+const costSum = (name, picked) => picked.reduce((t, p) => t + (PROVIDER_UI[name].cost[p] || 0), 0);
 
 function providerHtml(v) {
-  if (!v) return "";
-  const open = !v.connected || accts.open.has("socialcrawl");
-  const busy = accts.busy.has("socialcrawl");
+  const ui = PROVIDER_UI[v.name];
+  if (!ui) return "";
+  const open = accts.open.has(v.name) || (ui.openByDefault && !v.connected && !accts.open.has(`-${v.name}`));
+  const busy = accts.busy.has(v.name);
   const t = v.test;
-  const status = !v.connected ? `<p class="acct-status">Not set up · about two minutes, free to start</p>`
+  const status = !v.connected ? `<p class="acct-status">Not set up${ui.openByDefault ? " · takes about two minutes" : ""}</p>`
     : t && !t.ok ? `<p class="acct-status bad">${icon("alert")}<span>Not working: ${esc(t.message)}</span></p>`
     : t?.ok ? `<p class="acct-status ok">${icon("check")}<span>Connected${v.account ? ` · ${esc(v.account)}` : ""}</span></p>`
     : `<p class="acct-status">${icon("check")}<span>Key saved, not tested yet</span></p>`;
-  const credits = v.platforms.filter((p) => p.enabled).reduce((n, p) => n + costOf(p.name), 0);
-  return `<article class="acct provider${open ? " is-open" : ""}" id="acct-socialcrawl" data-name="socialcrawl">
+  const picked = v.platforms.filter((p) => p.enabled).map((p) => p.name);
+  return `<article class="acct provider${ui.openByDefault ? " featured" : ""}${open ? " is-open" : ""}" id="acct-${esc(v.name)}" data-name="${esc(v.name)}" data-provider="1">
     <div class="acct-head">
-      <span class="tag">Easiest</span>
-      <div class="acct-name"><h2>One key for all five platforms</h2>${status}</div>
+      <span class="tag${ui.openByDefault ? "" : " muted"}">${esc(ui.tag)}</span>
+      <div class="acct-name"><h2>${esc(ui.title)}</h2>${status}</div>
       <div class="acct-actions">
-        ${v.connected ? `<button class="btn ghost sm${busy ? " is-busy" : ""}" type="button" data-act="test"${busy ? " disabled" : ""}>${icon("refresh")}<span>Test</span></button>
-        <button class="btn ghost sm" type="button" data-act="toggle" aria-expanded="${open}">${open ? "Close" : "Manage"}</button>` : ""}
+        ${v.connected ? `<button class="btn ghost sm${busy ? " is-busy" : ""}" type="button" data-act="test"${busy ? " disabled" : ""}>${icon("refresh")}<span>Test</span></button>` : ""}
+        <button class="btn ghost sm" type="button" data-act="toggle" aria-expanded="${open}">${open ? "Close" : v.connected ? "Manage" : "Set up"}</button>
       </div>
     </div>
     <form class="acct-body"${open ? "" : " hidden"}>
       <section class="acct-section">
-        <p class="lead">SocialCrawl is a search service that covers X, Instagram, TikTok, LinkedIn and Xiaohongshu with one key. You don't need accounts on any of them.</p>
-        <ol class="steps big">
-          <li>Make a free account at <a href="${esc(v.signup_url)}" target="_blank" rel="noopener">socialcrawl.dev</a>. You get 100 credits and don't need a card.</li>
-          <li>In its dashboard, open <b>API Keys</b> and copy your key.</li>
-          <li>Paste it here and press <b>Save and test</b>.</li>
-        </ol>
-        <div class="fields one">${v.fields.map((f) => fieldHtml({ name: "socialcrawl" }, f)).join("")}</div>
-        <fieldset class="pick"><legend>Search these through SocialCrawl</legend>
-          ${v.platforms.map((p) => `<label data-p="${esc(p.name)}"><input type="checkbox" name="sc-platform" value="${esc(p.name)}"${p.enabled ? " checked" : ""}><span class="dot"></span>${esc(p.label)}<small>${esc(p.cost)}</small></label>`).join("")}
+        <p class="lead">${esc(ui.lead)}</p>
+        <ol class="steps big">${ui.steps(v).map((x) => `<li>${x}</li>`).join("")}</ol>
+        <div class="fields one">${v.fields.map((f) => fieldHtml({ name: v.name }, f)).join("")}</div>
+        <fieldset class="pick"><legend>Search these through ${esc(v.label)}</legend>
+          ${v.platforms.map((p) => `<label data-p="${esc(p.name)}"><input type="checkbox" name="pv-platform" value="${esc(p.name)}"${p.enabled ? " checked" : ""}><span class="dot"></span>${esc(p.label)}<small>${esc(p.cost)}</small></label>`).join("")}
         </fieldset>
-        <p class="note">One search across these uses about <b>${credits} credit${credits === 1 ? "" : "s"}</b>${v.platforms.find((p) => p.name === "xiaohongshu")?.enabled ? `, most of it Xiaohongshu (${XHS_NOTES} notes)` : ""}. Repeat searches within 5 minutes are free. A platform you connect with its own API below uses that instead.</p>
-        <div class="row"><button class="btn" type="submit"${busy ? " disabled" : ""}>Save and test</button>
-          <a class="linkish" href="${esc(v.keys_url)}" target="_blank" rel="noopener">Open the SocialCrawl dashboard</a></div>
+        <p class="note estimate">${ui.estimate(costSum(v.name, picked))}</p>
+        ${ui.extra ? `<p class="note">${esc(ui.extra)}</p>` : ""}
+        <div class="row"><button class="btn${ui.openByDefault ? "" : " ghost"}" type="submit"${busy ? " disabled" : ""}>Save and test</button>
+          <a class="linkish" href="${esc(v.keys_url)}" target="_blank" rel="noopener">${esc(ui.keysLink)}</a></div>
         ${resultHtml(v)}
-        <p class="note fine">SocialCrawl collects public posts without the platforms' permission, and it can see what you search for. Credits are about £15 for 2,500 and don't expire.</p>
-        ${v.connected ? `<div class="row"><span class="spacer"></span><button class="linkish danger-link" type="button" data-act="disconnect">Remove SocialCrawl key</button></div>` : ""}
+        <p class="note fine">${esc(ui.fine)} A platform you connect with its own API below uses that instead.</p>
+        ${v.connected ? `<div class="row"><span class="spacer"></span><button class="linkish danger-link" type="button" data-act="disconnect">Remove ${esc(v.label)} key</button></div>` : ""}
       </section>
     </form>
   </article>`;
@@ -784,43 +815,47 @@ function renderAccounts() {
   // Keep what the user is typing when a card re-renders.
   const typed = {};
   for (const el of $("acct-list").querySelectorAll("input:not([type=checkbox])")) if (el.value !== el.dataset.initial) typed[el.id] = el.value;
-  $("acct-list").innerHTML = providerHtml(accts.provider)
-    + `<h2 class="acct-group">Each platform</h2>`
+  $("acct-list").innerHTML = accts.providers.map(providerHtml).join("")
+    + `<h2 class="acct-group">Each platform's own API</h2>`
     + accts.list.map(accountHtml).join("");
   for (const [id, v] of Object.entries(typed)) { const el = $(id); if (el) el.value = v; }
 }
 
-async function saveProvider(form) {
+const providerLabel = (name) => accts.providers.find((x) => x.name === name)?.label || name;
+function setProvider(v) { accts.providers = accts.providers.map((x) => (x.name === v.name ? v : x)); }
+
+async function saveProvider(name, form) {
   const values = changedValues(form);
-  const picked = [...form.querySelectorAll("input[name=sc-platform]:checked")].map((x) => x.value).join(",");
-  values.SOCIALCRAWL_PLATFORMS = picked;
-  await withBusy("socialcrawl", async () => {
+  values[`${name.toUpperCase()}_PLATFORMS`] = [...form.querySelectorAll("input[name=pv-platform]:checked")].map((x) => x.value).join(",");
+  await withBusy(name, async () => {
     try {
-      accts.provider = await api("/api/accounts/socialcrawl", { method: "PUT", body: JSON.stringify({ values }) });
-      if (accts.provider.connected) await testProvider(false);
-      else toast("Paste your SocialCrawl key first");
+      const v = await api(`/api/accounts/provider/${name}`, { method: "PUT", body: JSON.stringify({ values }) });
+      setProvider(v);
+      if (v.connected) await testProvider(name, false);
+      else toast(`Paste your ${v.label} key first`);
     } catch (e) { toast(e.message); }
   });
   await loadAccounts();
   afterAccountChange();
 }
 
-async function testProvider(busy = true) {
+async function testProvider(name, busy = true) {
   const run = async () => {
     try {
-      const r = await api("/api/accounts/socialcrawl/test", { method: "POST" });
-      accts.provider = r.provider;
-      toast(r.ok ? `SocialCrawl works${r.account ? `: ${r.account}` : ""}` : `SocialCrawl: ${r.message}`);
+      const r = await api(`/api/accounts/provider/${name}/test`, { method: "POST" });
+      setProvider(r.provider);
+      toast(r.ok ? `${r.provider.label} works${r.account ? `: ${r.account}` : ""}` : `${r.provider.label}: ${r.message}`);
     } catch (e) { toast(e.message); }
   };
   if (!busy) return run();
-  await withBusy("socialcrawl", run);
+  await withBusy(name, run);
   await loadAccounts();
 }
 
-async function removeProvider() {
-  if (!confirm("Remove your SocialCrawl key? Platforms without their own API stop searching until you add it again.")) return;
-  try { accts.provider = await api("/api/accounts/socialcrawl", { method: "DELETE" }); toast("SocialCrawl key removed"); }
+async function removeProvider(name) {
+  const label = providerLabel(name);
+  if (!confirm(`Remove your ${label} key? Platforms that searched through it stop until you add a key again.`)) return;
+  try { setProvider(await api(`/api/accounts/provider/${name}`, { method: "DELETE" })); toast(`${label} key removed`); }
   catch (e) { toast(e.message); }
   await loadAccounts();
   afterAccountChange();
@@ -895,13 +930,17 @@ $("acct-list").addEventListener("click", async (e) => {
   if (!card || !act) return;
   const name = card.dataset.name;
   const form = card.querySelector("form");
-  if (name === "socialcrawl" && act !== "toggle") {
-    if (act === "test") return testProvider();
-    if (act === "disconnect") return removeProvider();
+  const isProvider = !!card.dataset.provider;
+  if (isProvider && act !== "toggle") {
+    if (act === "test") return testProvider(name);
+    if (act === "disconnect") return removeProvider(name);
     return;
   }
   if (act === "toggle") {
-    accts.open.has(name) ? accts.open.delete(name) : accts.open.add(name);
+    const wasOpen = card.classList.contains("is-open");
+    accts.open.delete(name); accts.open.delete(`-${name}`);
+    if (!wasOpen) accts.open.add(name);
+    else if (isProvider) accts.open.add(`-${name}`); // remember that an open-by-default card was closed
     renderAccounts();
     if (accts.open.has(name)) $(`acct-${name}`).querySelector("input")?.focus({ preventScroll: true });
   } else if (act === "test") testAccount(name);
@@ -919,15 +958,16 @@ $("acct-list").addEventListener("click", async (e) => {
 $("acct-list").addEventListener("submit", (e) => {
   e.preventDefault();
   const card = e.target.closest(".acct");
-  if (card?.dataset.name === "socialcrawl") saveProvider(e.target);
+  if (card?.dataset.provider) saveProvider(card.dataset.name, e.target);
   else if (card) saveAccount(card.dataset.name, e.target);
 });
 $("acct-list").addEventListener("change", (e) => {
-  if (e.target.name !== "sc-platform") return;
+  if (e.target.name !== "pv-platform") return;
   const form = e.target.form;
-  const n = [...form.querySelectorAll("input[name=sc-platform]:checked")].reduce((t, x) => t + costOf(x.value), 0);
-  const b = form.querySelector(".note b");
-  if (b) b.textContent = `${n} credit${n === 1 ? "" : "s"}`;
+  const name = form.closest(".acct").dataset.name;
+  const picked = [...form.querySelectorAll("input[name=pv-platform]:checked")].map((x) => x.value);
+  const note = form.querySelector(".note.estimate");
+  if (note) note.innerHTML = PROVIDER_UI[name].estimate(costSum(name, picked));
 });
 $("nav-accounts").addEventListener("click", () => openAccounts());
 $("manage-sources").addEventListener("click", () => openAccounts());

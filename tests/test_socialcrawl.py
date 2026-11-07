@@ -101,18 +101,22 @@ def app_client(tmp_path):
         yield c
 
 
+def sc(c):
+    return next(p for p in c.get("/api/accounts").json()["providers"] if p["name"] == "socialcrawl")
+
+
 def test_accounts_setup_test_and_search(app_client):
     c = app_client
-    provider = c.get("/api/accounts").json()["provider"]
+    provider = sc(c)
     assert provider["connected"] is False and all(p["enabled"] for p in provider["platforms"])
 
-    c.put("/api/accounts/socialcrawl", json={"values": {"SOCIALCRAWL_API_KEY": "sc_bad"}})
-    bad = c.post("/api/accounts/socialcrawl/test").json()
+    c.put("/api/accounts/provider/socialcrawl", json={"values": {"SOCIALCRAWL_API_KEY": "sc_bad"}})
+    bad = c.post("/api/accounts/provider/socialcrawl/test").json()
     assert bad["ok"] is False and "Invalid API key" in bad["message"]
 
-    c.put("/api/accounts/socialcrawl", json={"values": {"SOCIALCRAWL_API_KEY": "sc_good",
+    c.put("/api/accounts/provider/socialcrawl", json={"values": {"SOCIALCRAWL_API_KEY": "sc_good",
                                                          "SOCIALCRAWL_PLATFORMS": "x,tiktok"}})
-    good = c.post("/api/accounts/socialcrawl/test").json()
+    good = c.post("/api/accounts/provider/socialcrawl/test").json()
     assert good["ok"] and good["account"] == "97 credits left"
     assert c.crawl.calls[-1].url.params["dry_run"] == "true"  # the test spends nothing
 
@@ -129,9 +133,9 @@ def test_accounts_setup_test_and_search(app_client):
 
 def test_unticking_everything_is_kept(app_client):
     c = app_client
-    c.put("/api/accounts/socialcrawl", json={"values": {"SOCIALCRAWL_API_KEY": "sc_good", "SOCIALCRAWL_PLATFORMS": ""}})
-    provider = c.get("/api/accounts").json()["provider"]
+    c.put("/api/accounts/provider/socialcrawl", json={"values": {"SOCIALCRAWL_API_KEY": "sc_good", "SOCIALCRAWL_PLATFORMS": ""}})
+    provider = sc(c)
     assert not any(p["enabled"] for p in provider["platforms"])
-    assert c.put("/api/accounts/socialcrawl", json={"values": {"X_BEARER_TOKEN": "x"}}).status_code == 422
-    c.delete("/api/accounts/socialcrawl")
-    assert c.get("/api/accounts").json()["provider"]["connected"] is False
+    assert c.put("/api/accounts/provider/socialcrawl", json={"values": {"X_BEARER_TOKEN": "x"}}).status_code == 422
+    c.delete("/api/accounts/provider/socialcrawl")
+    assert sc(c)["connected"] is False

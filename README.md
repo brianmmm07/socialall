@@ -22,9 +22,11 @@ UI, through a JSON API, or from the command line.
 It runs with no API keys at all: until you connect a platform it shows sample
 ("demo") posts so you can try the app.
 
-- **Connect in the app.** Open **Accounts** in the sidebar. The easiest way is
-  one [SocialCrawl](https://www.socialcrawl.dev/) key, which searches all five
-  platforms (free to start, no card). You can also use each platform's own API.
+- **Connect in the app.** Open **Accounts** in the sidebar. The free way is one
+  [Apify](https://apify.com/) token: its free plan covers X, Instagram, TikTok and
+  LinkedIn with $5 of usage a month and no card. A paid
+  [SocialCrawl](https://www.socialcrawl.dev/) key also covers Xiaohongshu, and you
+  can still use each platform's own API.
 
 ## Quick start
 
@@ -96,7 +98,27 @@ favourites are kept but play online only.
 
 Open **Accounts** in the sidebar (or click a source under Sources).
 
-### Easiest: one key for all five
+### Free: one Apify token
+
+[Apify](https://apify.com/) runs public-post scrapers. Its free plan gives $5 of
+usage every month with no card; when it's used up, runs are blocked until the
+next monthly cycle and nothing is billed. None of your social accounts are used.
+
+1. Make a free account at [console.apify.com](https://console.apify.com/sign-up).
+2. Open **Settings → API & Integrations** and copy your **Personal API token**.
+3. Paste it into the top card on the Accounts page and press **Save and test**.
+   The test only reads your usage ("$1.25 of $5.00 used this month").
+
+SocialAll asks each scraper for 10 posts, so a search across X, Instagram,
+TikTok and LinkedIn costs about $0.09, roughly 55 searches a month. Results take
+up to a minute, because a scraper runs for each platform. Xiaohongshu starts off,
+because its Apify scrapers need a paid plan. The default scrapers are
+`apidojo/twitter-scraper-lite`, `apify/instagram-hashtag-scraper`,
+`clockworks/tiktok-scraper` and `harvestapi/linkedin-post-search`; set
+`APIFY_ACTOR_<PLATFORM>` (for example `APIFY_ACTOR_X`) to use another. The
+`.env` names are `APIFY_TOKEN` and `APIFY_PLATFORMS`.
+
+### Paid: SocialCrawl, one key for all five
 
 The platforms' own APIs are mostly closed to individuals: TikTok's is for
 approved academic researchers, LinkedIn's for approved companies and has no
