@@ -664,7 +664,8 @@ async function loadStorage() {
 }
 
 /* ---------- following: accounts read through the free feed service (RSSHub) ---------- */
-const fol = { info: null, platform: stored("follow-platform", "instagram"), adding: null, busy: false, poll: null, loadSeq: 0 };
+const fol = { info: null, platform: stored("follow-platform", "instagram"), kind: "account", adding: null, busy: false, poll: null, loadSeq: 0 };
+const KIND_LABELS = { account: "Account", keyword: "Keyword", home: "For you" };
 
 async function openFollowing(nav = "push") {
   state.searchAbort?.abort();
@@ -705,7 +706,9 @@ function followHeader() {
   if (!i) return;
   const n = i.follows.length;
   const checked = i.refreshed_at ? `checked ${ago(i.refreshed_at)}` : checksEvery(i);
-  setHeader("Following", n ? `${n} account${n === 1 ? "" : "s"} · ${i.posts} post${i.posts === 1 ? "" : "s"} · ${checked}`
+  const accounts = i.follows.filter((f) => f.kind === "account").length;
+  const what = accounts === n ? `${n} account${n === 1 ? "" : "s"}` : `${n} feeds`;
+  setHeader("Following", n ? `${what} · ${i.posts} post${i.posts === 1 ? "" : "s"} · ${checked}`
     : "Follow accounts and see their new posts in one stream. Free, with no limit.", n > 0 && i.service.running);
 }
 
@@ -807,6 +810,9 @@ function renderFollowPanel() {
   const token = $("x-token")?.value || "";
   const adding = fol.adding ?? !i.follows.length;
   const plat = i.platforms.find((p) => p.name === fol.platform) || i.platforms[0];
+  const kinds = plat.kinds || [];
+  const kind = kinds.find((k) => k.name === fol.kind);
+  const hint = kind || plat;  // placeholder and help for what's being followed
   const xHelp = (plat.name === "x" && adding) || i.follows.some((f) => f.platform === "x" && f.error);
   const errors = i.follows.filter((f) => f.error);
   $("follow").innerHTML = `
@@ -817,15 +823,17 @@ function renderFollowPanel() {
       </div>
       ${errors.length ? `<ul class="follow-errors">${errors.map((f) => `<li data-p="${esc(f.platform)}"><span class="dot"></span><b>${esc(f.label)}</b> ${esc(f.error)}</li>`).join("")}</ul>` : ""}` : ""}
     ${adding ? `<form class="follow-card follow-add" id="follow-add">
-        <div class="add-head"><h2>Follow an account</h2>${i.follows.length ? `<button class="linkish" type="button" data-act="adding">Done</button>` : ""}</div>
+        <div class="add-head"><h2>${kind?.name === "keyword" ? "Follow a keyword on X" : kind?.name === "home" ? "Add the spare account's For you feed" : "Follow an account"}</h2>${i.follows.length ? `<button class="linkish" type="button" data-act="adding">Done</button>` : ""}</div>
         <div class="seg plats" role="group" aria-label="Platform">${i.platforms.map((p) =>
           `<button type="button" data-plat="${esc(p.name)}" data-p="${esc(p.name)}" aria-pressed="${p.name === plat.name}"><span class="dot"></span>${esc(p.label)}</button>`).join("")}</div>
+        ${kinds.length ? `<div class="kinds" role="group" aria-label="What to follow on ${esc(plat.label)}">${["account", ...kinds.map((k) => k.name)].map((k) =>
+          `<button type="button" data-kind-pick="${k}" aria-pressed="${k === (kind?.name || "account")}">${KIND_LABELS[k] || k}</button>`).join("")}</div>` : ""}
         <div class="add-row">
-          <input id="follow-handle" name="handle" type="text" autocomplete="off" spellcheck="false" autocapitalize="off"
-            placeholder="${esc(plat.placeholder)}" aria-label="${esc(plat.label)} account" required>
-          <button class="btn" type="submit"${fol.busy ? " disabled" : ""}>${icon("plus")}<span>${fol.busy ? "Adding…" : "Follow"}</span></button>
+          ${kind?.name === "home" ? "" : `<input id="follow-handle" name="handle" type="text" autocomplete="off" spellcheck="false" autocapitalize="off"
+            placeholder="${esc(hint.placeholder)}" aria-label="${esc(kind ? `${KIND_LABELS[kind.name]} to follow on ${plat.label}` : `${plat.label} account`)}" required>`}
+          <button class="btn" type="submit"${fol.busy ? " disabled" : ""}>${icon("plus")}<span>${fol.busy ? "Adding…" : kind?.name === "home" ? "Add the For you feed" : "Follow"}</span></button>
         </div>
-        <p class="note">${esc(plat.help)}</p>
+        <p class="note">${esc(hint.help)}</p>
       </form>` : ""}
     ${xHelp ? xTokenHtml(i) : ""}`;
   if ($("follow-handle")) $("follow-handle").value = typed;
@@ -833,13 +841,14 @@ function renderFollowPanel() {
 }
 
 async function followAccount(form) {
-  const input = form.querySelector("#follow-handle");
-  const handle = input.value.trim();
-  if (!handle || fol.busy) return;
+  const kinds = fol.info.platforms.find((p) => p.name === fol.platform)?.kinds || [];
+  const kind = kinds.some((k) => k.name === fol.kind) ? fol.kind : "account";
+  const handle = form.querySelector("#follow-handle")?.value.trim() || "";
+  if ((!handle && kind !== "home") || fol.busy) return;
   fol.busy = true;
   renderFollowPanel();
   try {
-    const r = await api("/api/following", { method: "POST", body: JSON.stringify({ platform: fol.platform, handle }) });
+    const r = await api("/api/following", { method: "POST", body: JSON.stringify({ platform: fol.platform, kind, handle }) });
     const label = r.follow.label;
     toast(!r.created ? `Already following ${label}`
       : r.offline ? `Following ${label}. Start the feed service to load its posts`
@@ -912,9 +921,16 @@ function startServicePoll() {
 function stopServicePoll() { clearInterval(fol.poll); fol.poll = null; }
 
 $("follow").addEventListener("click", (e) => {
+  const pick = e.target.closest("[data-kind-pick]");
+  if (pick) {
+    fol.kind = pick.dataset.kindPick;
+    renderFollowPanel();
+    return $("follow-handle")?.focus({ preventScroll: true });
+  }
   const plat = e.target.closest("[data-plat]");
   if (plat) {
     fol.platform = plat.dataset.plat;
+    fol.kind = "account";
     store("follow-platform", fol.platform);
     renderFollowPanel();
     return $("follow-handle")?.focus({ preventScroll: true });
@@ -1060,7 +1076,7 @@ const PROVIDER_UI = {
     keysLink: "Open Apify settings",
     cost: { x: 0.01, instagram: 0.03, tiktok: 0.03, linkedin: 0.02, xiaohongshu: 0.06 },
     estimate: (n) => n ? `One search across these uses about <b>$${n.toFixed(2)}</b> of your free $5, so roughly <b>${Math.floor(5 / n)} searches a month</b>. Each platform asks for 10 posts, and results take up to a minute because a scraper runs for each one.` : "Tick at least one platform.",
-    extra: "Xiaohongshu starts off: Apify's scrapers for it need a paid plan. Repeat searches within 5 minutes are free.",
+    extra: "Xiaohongshu starts off: Apify's scrapers for it need a paid plan. Repeat searches within 5 minutes are free. Saved topics refresh by themselves, one topic a day, which uses about 30 searches a month.",
     fine: "The scrapers come from different authors in the Apify Store and collect public posts without the platforms' permission. If one stops working, tell Claude and it can switch to another.",
     openByDefault: true,
   },

@@ -16,6 +16,7 @@ def clean_env(monkeypatch, tmp_path):
     for key in ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("SOCIALALL_FEED_MINUTES", "0")  # no background feed refresh during tests
+    monkeypatch.setenv("SOCIALALL_TOPIC_REFRESHES_PER_DAY", "0")
     # Never touch the real keychain or config folder from tests.
     store = credentials.CredentialStore(tmp_path / "config", backend=None)
     credentials.use_store(store)

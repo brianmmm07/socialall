@@ -1,11 +1,14 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from socialall import credentials, feeds
-from socialall.app import create_app
+from socialall.app import auto_refresh_topic, create_app
+from socialall.connectors.base import Connector
+from socialall.models import Post
 from socialall.storage import Store
 
 XHS_ID = "593032945e87e77791e03696"
@@ -73,6 +76,11 @@ class RSSHub:
             if not self.x_token:
                 return httpx.Response(503, json={"error": {"message": "Twitter API is not configured, TWITTER_AUTH_TOKEN is required"}})
             return httpx.Response(200, json=feed(TWEET, RETWEET_VIDEO))
+        if path.startswith("/twitter/keyword/") or path == "/twitter/home":
+            if not self.x_token:
+                return httpx.Response(503, json={"error": {"message": "TWITTER_AUTH_TOKEN is required"}})
+            self.keyword = path.removeprefix("/twitter/keyword/")
+            return httpx.Response(200, json=feed(RETWEET_VIDEO))
         if path == "/instagram/user/cafe":
             return httpx.Response(200, json=feed(INSTA, REEL, {"title": "no id or link"}))
         if path == "/tiktok/user/@bob":
@@ -261,3 +269,83 @@ def test_image_proxy_only_fetches_known_image_hosts(app_client, monkeypatch):
     for bad in ("https://evil.example/a.jpg", "http://scontent.cdninstagram.com/1.jpg",
                 "https://scontent.cdninstagram.com:8443/1.jpg", "https://cdninstagram.com.evil.example/a.jpg"):
         assert c.get("/api/media", params={"u": bad}).status_code == 400
+
+
+def test_x_can_follow_a_search_and_the_spare_accounts_for_you(app_client):
+    c = app_client
+    c.hub.x_token = True
+    kw = c.post("/api/following", json={"platform": "x", "kind": "keyword", "handle": "  pour   over "}).json()
+    assert kw["follow"]["label"] == "“pour over”" and kw["follow"]["kind"] == "keyword" and kw["new"] == 1
+    assert c.hub.keyword == "pour over" and kw["follow"]["url"] == "https://x.com/search?q=pour%20over&f=live"
+    home = c.post("/api/following", json={"platform": "x", "kind": "home"}).json()
+    assert home["follow"]["label"] == "For you (spare account)" and home["created"]
+    posts = c.get("/api/following/posts").json()
+    assert [p["author"] for p in posts] == ["@bob"]  # each post keeps its own author
+    assert c.post("/api/following", json={"platform": "tiktok", "kind": "keyword", "handle": "x"}).status_code == 422
+    assert c.post("/api/following", json={"platform": "x", "kind": "keyword", "handle": " "}).status_code == 422
+    x = next(p for p in c.get("/api/following").json()["platforms"] if p["name"] == "x")
+    assert [k["name"] for k in x["kinds"]] == ["keyword", "home"]
+
+
+class Finder(Connector):
+    name, label = "x", "X"
+
+    def __init__(self):
+        super().__init__()
+        self.asked = []
+
+    def is_configured(self):
+        return True
+
+    async def search(self, topic, limit=20):
+        self.asked.append(topic)
+        return [Post(platform="x", id=f"{topic}-1", text=topic)]
+
+
+def test_saved_topics_refresh_themselves_once_a_day():
+    store, finder = Store(":memory:"), Finder()
+    latte = store.add_topic("latte art")
+    pour = store.add_topic("pour over")
+
+    def age(topic, hours):  # pretend the topic was last refreshed this long ago
+        when = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        store.conn.execute("UPDATE topics SET refreshed_at = ? WHERE id = ?", (when, topic["id"]))
+
+    run = lambda per_day=1: asyncio.run(auto_refresh_topic(store, [finder], per_day, 5))  # noqa: E731
+    age(latte, 2)
+    assert run() is None and finder.asked == []  # a topic was refreshed less than a day ago
+    age(latte, 25)
+    assert run() == pour["id"] and finder.asked == ["pour over"]  # the one never refreshed goes first
+    assert run() is None  # and that was today's search
+    age(pour, 25)
+    assert run() == latte["id"] and finder.asked[-1] == "latte art"
+    assert len(store.get_posts(latte["id"])) == 1
+    age(latte, 30)
+    age(pour, 30)
+    assert run(per_day=0) is None
+    assert asyncio.run(auto_refresh_topic(store, [], 1, 5)) is None  # nothing to search with
+
+
+def test_follows_from_the_first_version_are_kept(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    old = sqlite3.connect(path)
+    old.executescript("""
+        CREATE TABLE follows (id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL,
+          handle TEXT NOT NULL COLLATE NOCASE, name TEXT, added_at TEXT NOT NULL, checked_at TEXT, error TEXT,
+          UNIQUE (platform, handle));
+        CREATE TABLE feed_posts (platform TEXT NOT NULL, post_id TEXT NOT NULL,
+          follow_id INTEGER NOT NULL REFERENCES follows(id) ON DELETE CASCADE, data TEXT NOT NULL, created_at TEXT,
+          collected_at TEXT NOT NULL, PRIMARY KEY (platform, post_id));
+        INSERT INTO follows(platform, handle, added_at) VALUES ('x', 'alice', '2026-11-07');
+        INSERT INTO feed_posts VALUES ('x', '1', 1, '{"platform": "x", "id": "1"}', NULL, datetime('now'));
+    """)
+    old.commit()
+    old.close()
+    store = Store(path)
+    [alice] = store.list_follows()
+    assert alice["kind"] == "account" and alice["post_count"] == 1
+    assert store.add_follow("x", "alice", "keyword")[1] is True  # a search for "alice" is a different follow
+    store.delete_follow(alice["id"])
+    assert store.feed_count() == 0  # unfollowing still removes its posts

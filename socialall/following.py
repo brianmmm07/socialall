@@ -23,16 +23,18 @@ ADD_TIMEOUT = feeds.FETCH_TIMEOUT + 10
 
 class FollowIn(BaseModel):
     platform: str
-    handle: str
+    handle: str = ""
+    kind: str = "account"
 
 
 def describe_follow(f: dict) -> dict:
     return {
         "id": f["id"],
         "platform": f["platform"],
+        "kind": f.get("kind") or "account",
         "handle": f["handle"],
-        "label": feeds.display(f["platform"], f["handle"], f.get("name")),
-        "url": feeds.profile_url(f["platform"], f["handle"]),
+        "label": feeds.display(f["platform"], f["handle"], f.get("name"), f.get("kind") or "account"),
+        "url": feeds.profile_url(f["platform"], f["handle"], f.get("kind") or "account"),
         "added_at": f["added_at"],
         "checked_at": f.get("checked_at"),
         "error": f.get("error"),
@@ -52,7 +54,8 @@ class Refresher:
     async def one(self, follow: dict) -> tuple[list[str], str | None]:
         """Read one account. Returns (keys of new posts, error message)."""
         try:
-            name, posts = await feeds.fetch(self.client(), follow["platform"], follow["handle"], follow.get("name"))
+            name, posts = await feeds.fetch(self.client(), follow["platform"], follow["handle"], follow.get("name"),
+                                            kind=follow.get("kind") or "account")
         except feeds.FeedError as e:
             if e.kind != "offline":  # being offline is the service's problem, not this account's
                 self.store().checked_follow(follow["id"], error=str(e))
@@ -118,7 +121,11 @@ def following_router(store: Callable[[], Store], client: Callable[[], httpx.Asyn
             "follows": [describe_follow(f) for f in follows],
             "posts": store().feed_count(),
             "platforms": [
-                {"name": p, "label": feeds.LABELS[p], "placeholder": feeds.HINTS[p][0], "help": feeds.HINTS[p][1]}
+                {"name": p, "label": feeds.LABELS[p], "placeholder": feeds.HINTS[p][0], "help": feeds.HINTS[p][1],
+                 "kinds": [
+                     {"name": k, "placeholder": feeds.KIND_HINTS[k][0], "help": feeds.KIND_HINTS[k][1]}
+                     for k in feeds.KINDS[p] if k != "account"
+                 ]}
                 for p in feeds.PLATFORMS
             ],
             "refreshed_at": refresher.refreshed_at,
@@ -135,10 +142,10 @@ def following_router(store: Callable[[], Store], client: Callable[[], httpx.Asyn
     async def follow(body: FollowIn, request: Request):
         same_origin(request)
         try:
-            handle = feeds.parse_handle(body.platform, body.handle)
+            handle = feeds.parse_handle(body.platform, body.handle, body.kind)
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
-        f, created = store().add_follow(body.platform, handle)
+        f, created = store().add_follow(body.platform, handle, body.kind)
         result = {"new": 0, "error": None, "offline": False, "created": created}
         if await feeds.healthy(client()):
             try:

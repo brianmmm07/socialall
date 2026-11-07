@@ -8,6 +8,19 @@ from datetime import datetime, timezone
 
 from .models import Post
 
+# kind is "account", or on X also "keyword" (a search) or "home" (the token's For you feed).
+FOLLOWS_COLUMNS = """(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'account',
+    handle TEXT NOT NULL COLLATE NOCASE,
+    name TEXT,
+    added_at TEXT NOT NULL,
+    checked_at TEXT,
+    error TEXT,
+    UNIQUE (platform, kind, handle)
+)"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,16 +60,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 );
 CREATE INDEX IF NOT EXISTS favorites_by_time ON favorites(favorited_at DESC);
 -- Accounts followed through the feed service, and the posts read from them.
-CREATE TABLE IF NOT EXISTS follows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    platform TEXT NOT NULL,
-    handle TEXT NOT NULL COLLATE NOCASE,
-    name TEXT,
-    added_at TEXT NOT NULL,
-    checked_at TEXT,
-    error TEXT,
-    UNIQUE (platform, handle)
-);
+CREATE TABLE IF NOT EXISTS follows """ + FOLLOWS_COLUMNS + """;
 CREATE TABLE IF NOT EXISTS feed_posts (
     platform TEXT NOT NULL,
     post_id TEXT NOT NULL,
@@ -85,11 +89,31 @@ class Store:
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         # Keep the seen table small: posts not favourited go after a week.
         with self.conn:
             self.conn.execute("DELETE FROM seen WHERE seen_at < datetime('now', '-7 days')")
             # Followed accounts' posts are kept for three months.
             self.conn.execute("DELETE FROM feed_posts WHERE collected_at < datetime('now', '-90 days')")
+
+    def _migrate(self) -> None:
+        """Bring tables made by earlier versions up to date."""
+        columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(follows)")}
+        if "kind" not in columns:
+            # Follows from before X could follow searches: rebuild the table so it can tell them apart.
+            # Foreign keys go off for the swap, or dropping the old table would delete its posts.
+            self.conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                with self.conn:
+                    self.conn.execute(f"CREATE TABLE follows_new {FOLLOWS_COLUMNS}")
+                    self.conn.execute(
+                        "INSERT INTO follows_new(id, platform, kind, handle, name, added_at, checked_at, error) "
+                        "SELECT id, platform, 'account', handle, name, added_at, checked_at, error FROM follows"
+                    )
+                    self.conn.execute("DROP TABLE follows")
+                    self.conn.execute("ALTER TABLE follows_new RENAME TO follows")
+            finally:
+                self.conn.execute("PRAGMA foreign_keys = ON")
 
     def close(self) -> None:
         self.conn.close()
@@ -206,16 +230,16 @@ class Store:
         return Post.model_validate_json(row["data"]) if row else None
 
     # Followed accounts
-    def add_follow(self, platform: str, handle: str) -> tuple[dict, bool]:
-        """Follow an account. Returns (the follow, whether it's new)."""
+    def add_follow(self, platform: str, handle: str, kind: str = "account") -> tuple[dict, bool]:
+        """Follow an account (or a search). Returns (the follow, whether it's new)."""
         with self.conn:
             cur = self.conn.execute(
-                "INSERT INTO follows(platform, handle, added_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(platform, handle) DO NOTHING",
-                (platform, handle, _now()),
+                "INSERT INTO follows(platform, kind, handle, added_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(platform, kind, handle) DO NOTHING",
+                (platform, kind, handle, _now()),
             )
         row = self.conn.execute(
-            "SELECT id FROM follows WHERE platform = ? AND handle = ?", (platform, handle)
+            "SELECT id FROM follows WHERE platform = ? AND kind = ? AND handle = ?", (platform, kind, handle)
         ).fetchone()
         return self.get_follow(row["id"]), cur.rowcount > 0
 

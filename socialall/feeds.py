@@ -53,6 +53,12 @@ HINTS = {
     "linkedin": ("linkedin.com/company/name", "Company pages only. LinkedIn hides people's posts from anyone signed out."),
     "xiaohongshu": ("xiaohongshu.com/user/profile/…", "Paste the profile link from the website. No login needed."),
 }
+# Besides accounts, X can follow a search and the signed-in account's own recommendations.
+KINDS = {p: ["account"] for p in PLATFORMS} | {"x": ["account", "keyword", "home"]}
+KIND_HINTS = {
+    "keyword": ("A word, phrase or #hashtag", "Every new post on X that mentions it. Uses the spare account's token."),
+    "home": ("", "The spare account's own For you feed. Follow accounts you like from that account and it learns what to show."),
+}
 
 X_TOKEN_FIELD = Field(
     X_TOKEN_KEY, "X login token (auth_token)", placeholder="40 letters and numbers",
@@ -111,13 +117,24 @@ def _on(host: str, domains: tuple[str, ...]) -> bool:
     return any(host == d or host.endswith("." + d) for d in domains)
 
 
-def parse_handle(platform: str, text: str) -> str:
-    """Turn what someone typed or pasted into the account name RSSHub wants.
+def parse_handle(platform: str, text: str, kind: str = "account") -> str:
+    """Turn what someone typed or pasted into the account name (or search) RSSHub wants.
 
     Raises ValueError with a message for the person when it can't.
     """
     if platform not in PLATFORMS:
         raise ValueError("Unknown platform")
+    if kind not in KINDS[platform]:
+        raise ValueError(f"{LABELS[platform]} can't follow that")
+    if kind == "home":
+        return "home"
+    if kind == "keyword":
+        words = " ".join((text or "").split())
+        if not words:
+            raise ValueError("Type a word or phrase to follow")
+        if len(words) > 100:
+            raise ValueError("Keep it under 100 characters")
+        return words
     raw = (text or "").strip()
     if not raw:
         raise ValueError("Type a name or paste a profile link")
@@ -153,7 +170,11 @@ def parse_handle(platform: str, text: str) -> str:
     return handle if platform == "x" else handle.lower()
 
 
-def route(platform: str, handle: str) -> str:
+def route(platform: str, handle: str, kind: str = "account") -> str:
+    if kind == "keyword":
+        return f"/twitter/keyword/{quote(handle, safe='')}"
+    if kind == "home":
+        return "/twitter/home"
     return {
         "x": f"/twitter/user/{handle}",
         "instagram": f"/instagram/user/{handle}",
@@ -163,7 +184,11 @@ def route(platform: str, handle: str) -> str:
     }[platform]
 
 
-def profile_url(platform: str, handle: str) -> str:
+def profile_url(platform: str, handle: str, kind: str = "account") -> str:
+    if kind == "keyword":
+        return f"https://x.com/search?q={quote(handle, safe='')}&f=live"
+    if kind == "home":
+        return "https://x.com/home"
     return {
         "x": f"https://x.com/{handle}",
         "instagram": f"https://www.instagram.com/{handle}/",
@@ -173,7 +198,11 @@ def profile_url(platform: str, handle: str) -> str:
     }[platform]
 
 
-def display(platform: str, handle: str, name: str | None = None) -> str:
+def display(platform: str, handle: str, name: str | None = None, kind: str = "account") -> str:
+    if kind == "keyword":
+        return f"“{handle}”"
+    if kind == "home":
+        return "For you (spare account)"
     if platform in ("x", "instagram", "tiktok"):
         return f"@{handle}"
     return name or (handle if platform == "linkedin" else "Xiaohongshu account")
@@ -372,9 +401,9 @@ async def healthy(client: httpx.AsyncClient, timeout: float = 3) -> bool:
 
 
 async def fetch(client: httpx.AsyncClient, platform: str, handle: str, name: str | None = None,
-                limit: int = PER_FEED) -> tuple[str | None, list[Post]]:
-    """Read one account's feed. Returns (display name if RSSHub gave one, posts)."""
-    url = base_url() + route(platform, handle)
+                limit: int = PER_FEED, kind: str = "account") -> tuple[str | None, list[Post]]:
+    """Read one feed. Returns (display name if RSSHub gave one, posts)."""
+    url = base_url() + route(platform, handle, kind)
     try:
         r = await client.get(url, params={"format": "json", "limit": str(limit)}, timeout=FETCH_TIMEOUT)
     except httpx.ConnectError:
@@ -390,7 +419,8 @@ async def fetch(client: httpx.AsyncClient, platform: str, handle: str, name: str
     if r.status_code >= 400 or not isinstance(data, dict) or not isinstance(data.get("items"), list):
         raise _error(platform, r.status_code, data)
     found = feed_name(platform, data) if platform in ("linkedin", "xiaohongshu") else None
-    posts = [p for p in (to_post(platform, item, handle, found or name) for item in data["items"]) if p]
+    owner = handle if kind == "account" else None  # a search or a timeline has many authors
+    posts = [p for p in (to_post(platform, item, owner, found or name) for item in data["items"]) if p]
     return found, posts
 
 

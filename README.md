@@ -122,7 +122,7 @@ open-source feed service that runs on your Mac in Docker:
 
 | Platform | What you can follow | Login |
 | --- | --- | --- |
-| X | Any public account | A login token from a **spare** X account (below) |
+| X | Any public account, a keyword or #hashtag (every new post that mentions it), and the spare account's own For you feed | A login token from a **spare** X account (below) |
 | Instagram | Public accounts | None |
 | TikTok | Any account | None |
 | LinkedIn | Company pages (`linkedin.com/company/…`), not people | None |
@@ -133,7 +133,9 @@ cookie of an X account: sign in to x.com in your browser, open Developer Tools �
 Application (Storage in Safari) → Cookies → x.com, and copy `auth_token` into the
 box on the Following page. Use a spare account, because X can lock accounts it
 thinks are automated. SocialAll keeps the token with your other keys and passes
-it to RSSHub when it starts it.
+it to RSSHub when it starts it. Following that account's **For you** feed is a way
+to get recommendations without risking your main account: follow accounts you
+like from the spare account and X learns what to show it.
 
 The start button runs `docker run -d --name socialall-feeds -p 127.0.0.1:1200:1200
 diygod/rsshub:chromium-bundled` (the browser build, which LinkedIn and Xiaohongshu
@@ -168,6 +170,12 @@ because its Apify scrapers need a paid plan. The default scrapers are
 `clockworks/tiktok-scraper` and `harvestapi/linkedin-post-search`; set
 `APIFY_ACTOR_<PLATFORM>` (for example `APIFY_ACTOR_X`) to use another. The
 `.env` names are `APIFY_TOKEN` and `APIFY_PLATFORMS`.
+
+Saved topics refresh by themselves, which is how posts from accounts you don't
+follow keep turning up: the topic that waited longest is searched again, at most
+once a day across all topics (`SOCIALALL_TOPIC_REFRESHES_PER_DAY`, 0 turns it
+off). That's about 30 of the free plan's roughly 55 searches a month. A topic you
+refresh by hand counts as that day's search.
 
 ### Paid: SocialCrawl, one key for all five
 

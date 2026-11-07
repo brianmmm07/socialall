@@ -441,6 +441,10 @@ h1, h2, p { margin: 0; }
 .add-head .linkish { font-size: 13px; }
 .plats { flex-wrap: wrap; justify-self: start; max-width: 100%; }
 .plats button { display: inline-flex; align-items: center; gap: 7px; }
+.kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.kinds button { height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 13px; cursor: pointer; }
+.kinds button:hover { color: var(--text); background: var(--surface-2); }
+.kinds button[aria-pressed="true"] { border-color: oklch(0.56 0.15 42 / 0.45); background: var(--accent-soft); color: var(--text); }
 .add-row { display: flex; gap: 8px; max-width: 560px; }
 .add-row input {
   flex: 1; min-width: 0; height: 40px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--text);

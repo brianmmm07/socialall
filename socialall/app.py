@@ -7,6 +7,7 @@ import logging
 import sqlite3
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -20,8 +21,8 @@ from pydantic import BaseModel
 
 from . import config, export, feeds
 from .accounts import accounts_router
-from .following import Refresher, following_router
 from .aggregator import collect
+from .following import Refresher, following_router
 from .connectors import DemoConnector, active_connectors, all_connectors, provider_for
 from .models import Favorite, PlatformStatus, Post, SearchResult
 from .storage import Store
@@ -81,6 +82,28 @@ class SearchCache:
         self._items[key] = (time.monotonic(), result)
 
 
+async def auto_refresh_topic(store: Store, connectors: list, per_day: int, timeout: float,
+                             now: datetime | None = None) -> int | None:
+    """Refresh the saved topic that waited longest, at most `per_day` times a day across all topics.
+
+    Saved topics find posts from anyone, which is how new accounts turn up, but searches cost
+    Apify allowance. One a day is about 30 a month, inside the free plan's roughly 55.
+    Returns the id of the topic it refreshed, or None.
+    """
+    real = [c for c in connectors if c.name != "demo"]
+    topics = store.list_topics()
+    if per_day <= 0 or not real or not topics:
+        return None
+    now = now or datetime.now(timezone.utc)
+    done = [datetime.fromisoformat(t["refreshed_at"]) for t in topics if t.get("refreshed_at")]
+    if done and (now - max(done)).total_seconds() < 86400 / per_day:
+        return None  # a topic was refreshed recently, by hand or by this
+    topic = min(topics, key=lambda t: t.get("refreshed_at") or "")
+    result = await collect(topic["name"], real, 20, topic["platforms"], timeout)
+    store.save_posts(topic["id"], result.posts)  # marks it refreshed even when nothing came back
+    return topic["id"]
+
+
 def create_app(
     store: Store | None = None,
     client: httpx.AsyncClient | None = None,
@@ -105,9 +128,10 @@ def create_app(
             log.info("video cache: removed %d leftover files (%d bytes)", freed["files"], freed["bytes"])
         for fav in state["store"].list_favorites(status="pending"):
             start_download(fav["post"])
-        background = asyncio.create_task(refresher.forever())
+        background = [asyncio.create_task(refresher.forever()), asyncio.create_task(topics_forever())]
         yield
-        background.cancel()
+        for task in background:
+            task.cancel()
         for task in list(state["tasks"]):
             task.cancel()
         if client is None:
@@ -136,6 +160,18 @@ def create_app(
 
     def timeout() -> float:
         return float(config.int_env("SOCIALALL_PLATFORM_TIMEOUT", 15))
+
+    async def topics_forever():
+        per_day = config.int_env("SOCIALALL_TOPIC_REFRESHES_PER_DAY", 1)
+        if per_day <= 0:
+            return
+        await asyncio.sleep(120)
+        while True:
+            try:
+                await auto_refresh_topic(state["store"], connectors(), per_day, timeout())
+            except Exception:
+                log.exception("automatic topic refresh failed")
+            await asyncio.sleep(30 * 60)  # check twice an hour; the gap between refreshes lives in the database
 
     def start_download(post: Post) -> None:
         async def run():
