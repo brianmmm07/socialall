@@ -389,6 +389,7 @@ class Chromium:
         self.pace = pace  # tests make the pauses shorter
         self._version: str | None = None
         self._pending: list[asyncio.Future] = []  # reading the answers the page got
+        self.seen: list[str] = []  # where the last read's page asked for data, for the log when it finds nothing
 
     @property
     def profile(self) -> Path:
@@ -499,6 +500,9 @@ class Chromium:
             url = response.url
         except Exception:
             return
+        if len(self.seen) < 80:
+            parts = urlsplit(url)
+            self.seen.append(f"{parts.hostname}{parts.path}")  # no query: it can carry tokens
         target = feed if feed is not None and site.feed.search(url) else me if site.me and site.me.search(url) else None
         if target is not None:
             self._pending.append(asyncio.ensure_future(self._keep(response, target)))
@@ -514,6 +518,7 @@ class Chromium:
         from playwright.async_api import async_playwright
 
         self._pending: list[asyncio.Future] = []
+        self.seen = []
         feed: list = []
         me: list = []
         async with async_playwright() as p:
@@ -742,7 +747,8 @@ class ForYou:
             if posts:
                 new = len(self.store().save_feed_posts(f["id"], posts))
             else:
-                log.warning("%s For you: %d responses, no posts", platform, len(payloads))
+                log.warning("%s For you: %d feed answers but no posts. The page asked for: %s", platform,
+                            len(payloads), ", ".join(dict.fromkeys(getattr(self.browser, "seen", []))) or "nothing")
                 error = (f"{label} loaded, but SocialAll found no posts in it. The site may have changed. "
                          "SocialAll tries again later.")
         self.store().checked_follow(f["id"], error=error)
