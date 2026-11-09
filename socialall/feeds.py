@@ -458,6 +458,20 @@ def docker() -> str | None:
     return shutil.which("docker") or next((p for p in DOCKER_PATHS if os.access(p, os.X_OK)), None)
 
 
+def docker_env(**extra: str) -> dict:
+    """The environment for docker commands. docker runs helpers of its own, such as docker-credential-desktop
+    for every download, and finds them on PATH, which is short for apps opened from the Dock."""
+    env = dict(os.environ)
+    folders = []
+    if exe := docker():
+        folders += [str(Path(exe).resolve().parent), str(Path(exe).parent)]  # /usr/local/bin/docker links into Docker.app
+    folders += [str(Path(p).parent) for p in DOCKER_PATHS]
+    folders += (env.get("PATH") or "").split(os.pathsep)
+    env["PATH"] = os.pathsep.join(dict.fromkeys(f for f in folders if f))
+    env.update(extra)
+    return env
+
+
 async def run_command(*args: str, env: dict | None = None, timeout: float = 60) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
         *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env,
@@ -511,7 +525,7 @@ class Service:
         exe = docker()
         if not exe or not is_local():
             return False
-        code, _ = await run_command(exe, "inspect", "--format", "{{.Name}}", CONTAINER, timeout=20)
+        code, _ = await run_command(exe, "inspect", "--format", "{{.Name}}", CONTAINER, env=docker_env(), timeout=20)
         if code != 0:
             return False
         self.start(client)
@@ -535,21 +549,24 @@ class Service:
         exe = docker()
         if not exe:
             raise FeedError("Docker isn't installed. Install Docker Desktop (free), open it once, then press Start again.")
-        code, _ = await run_command(exe, "info", "--format", "{{.ServerVersion}}", timeout=30)
+        env = docker_env()
+        code, _ = await run_command(exe, "info", "--format", "{{.ServerVersion}}", env=env, timeout=30)
         if code != 0:
             raise FeedError("Docker is installed but not running. Open Docker Desktop, wait until it says it's running, then press Start again.")
         self.step = "Downloading the feed service. The first time is a large download and can take a few minutes"
-        code, out = await run_command(exe, "pull", IMAGE, timeout=1800)
+        code, out = await run_command(exe, "pull", IMAGE, env=env, timeout=1800)
         if code != 0:
-            have, _ = await run_command(exe, "image", "inspect", IMAGE, timeout=30)
+            have, _ = await run_command(exe, "image", "inspect", IMAGE, env=env, timeout=30)
             if have != 0:
+                if "docker-credential" in out:
+                    raise FeedError("Docker couldn't find its sign-in helper. Quit and reopen Docker Desktop, "
+                                    "then press Start again.")
                 raise FeedError(f"Couldn't download the feed service. {_last_line(out)}")
         self.step = "Starting the feed service"
-        await run_command(exe, "rm", "-f", CONTAINER, timeout=60)
+        await run_command(exe, "rm", "-f", CONTAINER, env=env, timeout=60)
         args = ["run", "-d", "--name", CONTAINER, "--restart", "unless-stopped",
                 "-p", f"127.0.0.1:{local_port()}:1200",
                 "-e", "CACHE_EXPIRE=600", "-e", "CACHE_CONTENT_EXPIRE=7200"]
-        env = dict(os.environ)
         if token := credentials.setting(X_TOKEN_KEY):
             env[X_TOKEN_KEY] = token
             args += ["-e", X_TOKEN_KEY]  # passed through the environment, so it never shows in a process list
