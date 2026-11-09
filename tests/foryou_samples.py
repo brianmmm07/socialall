@@ -64,3 +64,13 @@ XHS_FEED = {"code": 0, "success": True, "data": {"cursor_score": "1.7", "items":
 ]}}
 XHS_ME_GUEST = {"code": 0, "success": True, "data": {"guest": True, "user_id": "6600"}}
 XHS_ME = {"code": 0, "success": True, "data": {"user_id": "5f00", "nickname": "Brian", "red_id": "123"}}
+
+# The Following pages: posts from accounts you follow, in the same shapes as For you.
+IG_FOLLOWING = {"data": {"xdt_api__v1__feed__timeline__connection": {"edges": [
+    {"node": {"media": ig_media("3501", "Fo1", "friend")}},
+    {"node": {"media": ig_media("3401", "Ab1")}},  # also on For you: one copy in the stream
+]}}}
+TT_FOLLOWING = {"statusCode": 0, "itemList": [
+    {"id": "7440000000000000001", "desc": "new roast", "createTime": 1730900000, "author": {"uniqueId": "friend"},
+     "video": {"cover": "https://p16.tiktokcdn.com/f.jpeg"}, "stats": {"diggCount": 12}},
+]}

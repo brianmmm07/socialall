@@ -1,9 +1,13 @@
-"""Your own For you feeds from Instagram, TikTok and Xiaohongshu, read in a browser on this Mac.
+"""Your own feeds from Instagram, TikTok and Xiaohongshu, read in a browser on this Mac.
+
+Each platform has its For you feed (what it recommends to you), and Instagram and TikTok also have their
+Following feed (new posts from the accounts you follow there). Xiaohongshu's website has neither a
+Following page nor a list of who you follow.
 
 You sign in once, in a browser window SocialAll opens, by typing into the platform's own page. That
 browser keeps its own profile (cookies and all) in SocialAll's settings folder, apart from your everyday
 browser, so your password never passes through SocialAll. Every couple of hours SocialAll opens the same
-profile without a window, loads the For you page, scrolls a few times with pauses like a person's, and
+profile without a window, loads a feed page, scrolls a few times with pauses like a person's, and
 keeps the posts the page itself received from the site. It never likes, follows, comments or posts.
 
 Platforms don't allow automated reading. They can sign you out, ask you to prove you're a person, or,
@@ -31,14 +35,17 @@ from urllib.parse import quote, urlsplit
 
 from . import credentials
 from .connectors.base import parse_time
-from .feeds import FOR_YOU_URLS, LABELS, _last_line, run_command
+from .feeds import FOLLOWED_URLS, FOR_YOU_URLS, LABELS, _last_line, run_command
 from .models import Post
 from .storage import Store
 
 log = logging.getLogger(__name__)
 
-KIND = "foryou"  # stored as a follow of this kind, so its posts join the Following stream
-HANDLE = "foryou"
+# Each feed is stored as a follow of its kind, so its posts join the Following stream.
+FOR_YOU = "foryou"  # what the platform recommends to you
+FOLLOWED = "followed"  # posts from the accounts you follow there
+KINDS = (FOR_YOU, FOLLOWED)
+FEED_LABELS = {FOR_YOU: "For you", FOLLOWED: "Following"}
 PLATFORMS = ["instagram", "tiktok", "xiaohongshu"]
 PLAYWRIGHT = "playwright>=1.49,<2"
 MIN_GAP = 10 * 60  # seconds between two reads of the same feed, however they're asked for
@@ -76,19 +83,31 @@ class Site:
     me: re.Pattern | None = None  # a request that answers whether you're signed in
     guest_cookie: bool = False  # visitors get the session cookie too, so only a change means anything
     guest: str = ""  # something on the page only visitors see, like a sign-in form
+    following: str | None = None  # the page of posts from accounts you follow, where the website has one
+    following_feed: re.Pattern | None = None  # its requests, when they differ from the For you page's
+
+    def kinds(self) -> list[str]:
+        return [FOR_YOU, FOLLOWED] if self.following else [FOR_YOU]
+
+    def page(self, kind: str) -> tuple[str, re.Pattern]:
+        if kind == FOLLOWED and self.following:
+            return self.following, self.following_feed or self.feed
+        return self.home, self.feed
 
 
 SITES = {
     "instagram": Site(
         "instagram", FOR_YOU_URLS["instagram"], "https://www.instagram.com/accounts/login/", "instagram.com",
         "sessionid", re.compile(r"instagram\.com/(?:graphql/query|api/graphql|api/v1/feed/)"), ("image_versions2",),
-        guest='input[name="username"], form#loginForm',
+        guest='input[name="username"], form#loginForm', following=FOLLOWED_URLS["instagram"],
     ),
     "tiktok": Site(
         "tiktok", FOR_YOU_URLS["tiktok"], "https://www.tiktok.com/login", "tiktok.com",
         "sessionid", re.compile(r"tiktok\.com/api/(?:recommend|preload)/item_list"), ('"createTime"',),
-        guest='[data-e2e="top-login-button"]',
+        guest='[data-e2e="top-login-button"]', following=FOLLOWED_URLS["tiktok"],
+        following_feed=re.compile(r"tiktok\.com/api/(?!recommend/)[a-z_/]+/item_list"),
     ),
+    # Xiaohongshu's website has no page of posts from accounts you follow, nor a list of them.
     "xiaohongshu": Site(
         "xiaohongshu", FOR_YOU_URLS["xiaohongshu"], FOR_YOU_URLS["xiaohongshu"], "xiaohongshu.com",
         "web_session", re.compile(r"xiaohongshu\.com/api/sns/web/v1/homefeed"),
@@ -493,7 +512,7 @@ class Chromium:
                 await ctx.close()
         return bool(value) and (not site.guest_cookie or value != before)
 
-    def _catch(self, response, site: Site, feed: list | None, me: list) -> None:
+    def _catch(self, response, site: Site, feed: list | None, me: list, wanted: re.Pattern | None = None) -> None:
         try:
             if response.request.resource_type not in ("xhr", "fetch"):
                 return
@@ -503,7 +522,8 @@ class Chromium:
         if len(self.seen) < 80:
             parts = urlsplit(url)
             self.seen.append(f"{parts.hostname}{parts.path}")  # no query: it can carry tokens
-        target = feed if feed is not None and site.feed.search(url) else me if site.me and site.me.search(url) else None
+        target = (feed if feed is not None and (wanted or site.feed).search(url)
+                  else me if site.me and site.me.search(url) else None)
         if target is not None:
             self._pending.append(asyncio.ensure_future(self._keep(response, target)))
 
@@ -513,8 +533,8 @@ class Chromium:
         except Exception:
             pass  # not JSON, or gone before it could be read
 
-    async def read(self, site: Site, scrolls: int = 4) -> list:
-        """Load the For you page without a window, scroll a little, and return the JSON it received."""
+    async def read(self, site: Site, kind: str = FOR_YOU, scrolls: int = 4) -> list:
+        """Load a feed page without a window, scroll a little, and return the JSON it received."""
         from playwright.async_api import async_playwright
 
         self._pending: list[asyncio.Future] = []
@@ -526,9 +546,10 @@ class Chromium:
             try:
                 if not site.guest_cookie and not _cookie(await ctx.cookies([site.home]), site.session):
                     raise SignInNeeded(signed_out(site.name))  # don't even knock without a session
+                url, wanted = site.page(kind)
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                page.on("response", lambda r: self._catch(r, site, feed, me))
-                await page.goto(site.home, wait_until="domcontentloaded", timeout=60_000)
+                page.on("response", lambda r: self._catch(r, site, feed, me, wanted))
+                await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                 await _pause(3 * self.pace, 6 * self.pace)
                 if problem := _problem(site, page.url, await page.evaluate(PROBLEMS_JS, site.guest)):
                     raise SignInNeeded(problem)
@@ -579,12 +600,13 @@ def _ago(iso: str | None, now: datetime) -> float | None:
 
 
 class ForYou:
-    """Signs in, reads each signed-in For you feed every few hours, and says how it's going."""
+    """Signs in, reads each signed-in feed every few hours, and says how it's going."""
 
     def __init__(self, store: Callable[[], Store], browser=None, hours: float = 2):
         self.store = store
         self.browser = browser or Chromium()
         self.hours = hours
+        self.gap = (8.0, 20.0)  # seconds between a platform's two feeds, like switching tabs
         self.job: dict | None = None  # what the browser is doing now: platform, what, step
         self.notes: dict[str, dict] = {}  # how the last attempt went, per platform
         self._lock = asyncio.Lock()  # the profile can only be open once
@@ -595,8 +617,13 @@ class ForYou:
         self._checked = 0.0
 
     # ----- state -----
-    def follows(self) -> dict[str, dict]:
-        return {f["platform"]: f for f in self.store().list_follows() if f.get("kind") == KIND}
+    def feeds(self) -> dict[str, dict[str, dict]]:
+        """The feeds that are on, by platform and then kind. A platform with any is signed in."""
+        out: dict[str, dict[str, dict]] = {}
+        for f in self.store().list_follows():
+            if f.get("kind") in KINDS and f["platform"] in SITES:
+                out.setdefault(f["platform"], {})[f["kind"]] = f
+        return out
 
     def busy(self) -> bool:
         return self._task is not None and not self._task.done()
@@ -610,20 +637,31 @@ class ForYou:
         return self._ready
 
     async def status(self) -> dict:
-        follows = self.follows()
+        everything = self.feeds()
         rows = []
         for name in PLATFORMS:
-            f = follows.get(name)
+            site = SITES[name]
+            mine = everything.get(name, {})
             note = self.notes.get(name) or {}
+            errors = [f["error"] for f in mine.values() if f.get("error")]
+            read = [f["checked_at"] for f in mine.values() if f.get("checked_at")]
             rows.append({
                 "name": name,
                 "label": LABELS[name],
-                "url": SITES[name].home,
-                "on": f is not None,
-                "read_at": f.get("checked_at") if f else None,
-                "error": f.get("error") if f else None,
-                "sign_in_again": needs_sign_in(f.get("error")) if f else False,
-                "posts": f.get("post_count", 0) if f else 0,
+                "url": site.home,
+                "on": bool(mine),
+                "read_at": max(read) if read else None,
+                "error": next((e for e in errors if needs_sign_in(e)), errors[0] if errors else None),
+                "sign_in_again": any(needs_sign_in(e) for e in errors),
+                "posts": sum(f.get("post_count", 0) for f in mine.values()),
+                "feeds": [{
+                    "kind": kind,
+                    "label": FEED_LABELS[kind],
+                    "url": site.page(kind)[0],
+                    "on": kind in mine,
+                    "posts": mine[kind].get("post_count", 0) if kind in mine else 0,
+                    "error": mine[kind].get("error") if kind in mine else None,
+                } for kind in site.kinds()],
                 "note": note.get("text"),
                 "note_bad": note.get("bad", False),
             })
@@ -686,91 +724,131 @@ class ForYou:
         if not ok:
             self._note(platform, f"SocialAll didn't see a sign-in to {label}. Press Sign in to try again.", bad=True)
             return
-        self.store().add_follow(platform, KIND, HANDLE)
+        if platform not in self.feeds():  # the first time, every feed the site has; after that, the ones you kept
+            for kind in SITES[platform].kinds():
+                self.store().add_follow(platform, kind, kind)
         self._note(platform, f"Signed in to {label}")
         await self._read(platform)
 
+    # ----- choosing feeds -----
+    def set_feed(self, platform: str, kind: str, on: bool) -> None:
+        """Turn one of a signed-in platform's feeds on (and read it soon) or off (and drop its posts)."""
+        label = LABELS[platform]
+        if kind not in SITES[platform].kinds():
+            raise LookupError(f"{label}'s website has no {FEED_LABELS.get(kind, kind)} feed.")
+        mine = self.feeds().get(platform, {})
+        if not mine:
+            raise LookupError(f"Sign in to {label} first.")
+        if on and kind not in mine:
+            self.store().add_follow(platform, kind, kind)
+            if not self.busy():
+                self._start(self._read(platform, [kind]))
+        elif not on and kind in mine:
+            if len(mine) == 1:
+                raise ValueError(f"That's the last {label} feed. To stop them all, press Sign out.")
+            self.store().delete_follow(mine[kind]["id"])
+
     # ----- reading -----
     def start_read(self, platform: str, now: datetime | None = None) -> None:
-        f = self.follows().get(platform)
-        if not f:
+        mine = self.feeds().get(platform)
+        if not mine:
             raise LookupError(f"Sign in to {LABELS[platform]} first.")
-        waited = _ago(f.get("checked_at"), now or datetime.now(timezone.utc))
+        now = now or datetime.now(timezone.utc)
+        waits = [w for w in (_ago(f.get("checked_at"), now) for f in mine.values()) if w is not None]
+        waited = min(waits) if waits else None
         if waited is not None and waited < MIN_GAP:
             left = max(1, round((MIN_GAP - waited) / 60))
             raise TooSoon(f"Read {max(0, round(waited / 60))} min ago. SocialAll waits {MIN_GAP // 60} minutes "
                           f"between reads so it doesn't look like a robot. Try again in {left} min.")
         self._start(self._read(platform))
 
+    def _older_than(self, seconds: float | Callable[[], float], now: datetime) -> dict[str, list[str]]:
+        """The feeds not read for a while, by platform, leaving out platforms that wait for a sign-in."""
+        out: dict[str, list[str]] = {}
+        for platform, mine in self.feeds().items():
+            if any(needs_sign_in(f.get("error")) for f in mine.values()):
+                continue  # knocking again while signed out is what gets accounts flagged
+            for kind, f in mine.items():
+                waited = _ago(f.get("checked_at"), now)
+                limit = seconds() if callable(seconds) else seconds
+                if waited is None or waited > limit:
+                    out.setdefault(platform, []).append(kind)
+        return out
+
     def refresh_stale(self, now: datetime | None = None) -> list[str]:
-        """For the Refresh button: read the signed-in feeds not read in the last half hour, one after another."""
+        """For the Refresh button: read the feeds not read in the last half hour, one platform after another."""
         if self.busy():
             return []
-        now = now or datetime.now(timezone.utc)
-        stale = []
-        for platform, f in self.follows().items():
-            waited = _ago(f.get("checked_at"), now)
-            if not needs_sign_in(f.get("error")) and (waited is None or waited > STALE):
-                stale.append(platform)
+        stale = self._older_than(STALE, now or datetime.now(timezone.utc))
         if stale:
             self._start(self._read_all(stale))
-        return stale
+        return list(stale)
 
-    async def _read_all(self, platforms: list[str]) -> None:
-        for i, platform in enumerate(platforms):
+    async def _read_all(self, todo: dict[str, list[str]]) -> None:
+        for i, (platform, kinds) in enumerate(todo.items()):
             if i:
                 self.job = {"platform": platform, "what": "read", "step": f"Reading {LABELS[platform]} in a moment"}
                 await _pause(20, 45)  # not all at once
-            await self._read(platform)
+            await self._read(platform, kinds)
 
-    async def _read(self, platform: str) -> None:
+    async def _read(self, platform: str, kinds: list[str] | None = None) -> None:
         label = LABELS[platform]
-        f = self.follows().get(platform)
-        if not f:
-            return
-        self.job = {"platform": platform, "what": "read", "step": f"Reading your {label} For you feed"}
-        error, new, payloads = None, 0, []
-        try:
-            async with self._lock:
-                payloads = await asyncio.wait_for(self.browser.read(SITES[platform]), READ_TIMEOUT)
-        except SignInNeeded as e:
-            error = str(e)
-        except TimeoutError:
-            error = f"{label} took too long to load. SocialAll tries again later."
-        except Exception as e:
-            log.exception("reading the %s For you feed failed", platform)
-            error = f"Couldn't read {label} ({type(e).__name__}). SocialAll tries again later."
-        if not self.store().get_follow(f["id"]):
-            return  # signed out while it was reading
-        if error is None:
-            posts = parse(platform, payloads)
-            if posts:
-                new = len(self.store().save_feed_posts(f["id"], posts))
-            else:
-                log.warning("%s For you: %d feed answers but no posts. The page asked for: %s", platform,
-                            len(payloads), ", ".join(dict.fromkeys(getattr(self.browser, "seen", []))) or "nothing")
-                error = (f"{label} loaded, but SocialAll found no posts in it. The site may have changed. "
-                         "SocialAll tries again later.")
-        self.store().checked_follow(f["id"], error=error)
-        if error:
-            self._note(platform, error, bad=True)
-        else:
-            self._note(platform, f"{new} new post{'' if new == 1 else 's'} from your {label} For you feed", new=new)
+        mine = self.feeds().get(platform, {})
+        todo = [k for k in SITES[platform].kinds() if k in mine and (kinds is None or k in kinds)]
+        new, bad = 0, None
+        for i, kind in enumerate(todo):
+            if i:
+                await _pause(*self.gap)
+            feed = FEED_LABELS[kind]
+            self.job = {"platform": platform, "what": "read", "step": f"Reading your {label} {feed} feed"}
+            f = mine[kind]
+            error, payloads = None, []
+            try:
+                async with self._lock:
+                    payloads = await asyncio.wait_for(self.browser.read(SITES[platform], kind), READ_TIMEOUT)
+            except SignInNeeded as e:
+                error = str(e)
+            except TimeoutError:
+                error = f"{label} took too long to load. SocialAll tries again later."
+            except Exception as e:
+                log.exception("reading the %s %s feed failed", platform, kind)
+                error = f"Couldn't read {label} ({type(e).__name__}). SocialAll tries again later."
+            if not self.store().get_follow(f["id"]):
+                continue  # turned off or signed out while it was reading
+            if error is None:
+                posts = parse(platform, payloads)
+                if posts:
+                    new += len(self.store().save_feed_posts(f["id"], posts))
+                else:
+                    log.warning("%s %s: %d feed answers but no posts. The page asked for: %s", platform, kind,
+                                len(payloads), ", ".join(dict.fromkeys(getattr(self.browser, "seen", []))) or "nothing")
+                    error = (f"{label}'s {feed} page loaded, but SocialAll found no posts in it. The site may have "
+                             "changed. SocialAll tries again later.")
+            self.store().checked_follow(f["id"], error=error)
+            bad = bad or error
+            if needs_sign_in(error):
+                for other in todo[i + 1:]:  # the same sign-in reads them all, so they all wait for you
+                    self.store().checked_follow(mine[other]["id"], error=error)
+                break
+        if bad:
+            self._note(platform, bad, bad=True)
+        elif todo:
+            self._note(platform, f"{new} new post{'' if new == 1 else 's'} from {label}", new=new)
 
     # ----- signing out -----
     async def sign_out(self, platform: str) -> bool:
-        """Stop reading this feed, drop its posts, and forget the sign-in. False if it wasn't signed in."""
-        f = self.follows().get(platform)
+        """Stop reading this platform, drop its posts, and forget the sign-in. False if it wasn't signed in."""
+        mine = self.feeds().get(platform, {})
         if self.job and self.job.get("platform") == platform and self.job.get("what") == "sign_in":
             self._close.set()
         self.notes.pop(platform, None)
-        if f:
+        for f in mine.values():
             self.store().delete_follow(f["id"])
         if await self.ready():
             task = asyncio.create_task(self._forget(platform))
             self._chores.add(task)
             task.add_done_callback(self._chores.discard)
-        return f is not None
+        return bool(mine)
 
     async def _forget(self, platform: str) -> None:
         try:
@@ -799,18 +877,11 @@ class ForYou:
             raise SetupError("The sign-in browser downloaded but won't start. Restart SocialAll and try again.")
 
     # ----- every few hours -----
-    def due(self, now: datetime | None = None) -> list[str]:
+    def due(self, now: datetime | None = None) -> dict[str, list[str]]:
         if self.hours <= 0:
-            return []
-        now = now or datetime.now(timezone.utc)
-        due = []
-        for platform, f in self.follows().items():
-            if needs_sign_in(f.get("error")):
-                continue  # knocking again while signed out is what gets accounts flagged
-            waited = _ago(f.get("checked_at"), now)
-            if waited is None or waited > self.hours * 3600 * random.uniform(0.85, 1.15):
-                due.append(platform)
-        return due
+            return {}
+        return self._older_than(lambda: self.hours * 3600 * random.uniform(0.85, 1.15),
+                                now or datetime.now(timezone.utc))
 
     async def forever(self) -> None:
         if self.hours <= 0:
@@ -819,13 +890,13 @@ class ForYou:
         while True:
             try:
                 if not self.busy() and await self.ready():
-                    for i, platform in enumerate(self.due()):
+                    for i, (platform, kinds) in enumerate(self.due().items()):
                         if i:
                             await _pause(60, 180)
                         if self.busy():
                             break  # you started something; the rest wait for the next round
-                        self._start(self._read(platform))
+                        self._start(self._read(platform, kinds))
                         await self._task
             except Exception:
-                log.exception("background For you read failed")
+                log.exception("background read of your feeds failed")
             await asyncio.sleep(300)

@@ -10,7 +10,8 @@ import time
 
 import pytest
 
-from foryou_samples import IG_PAGE, IG_TIMELINE, TT_ITEMS, XHS_FEED, XHS_ME, XHS_ME_GUEST
+from foryou_samples import (IG_FOLLOWING, IG_PAGE, IG_TIMELINE, TT_FOLLOWING, TT_ITEMS, XHS_FEED, XHS_ME,
+                            XHS_ME_GUEST)
 from socialall import foryou
 
 pytestmark = pytest.mark.skipif(not asyncio.run(foryou.Chromium().installed()),
@@ -42,9 +43,12 @@ class Sites:
             self.reports.append(url)
             return await route.fulfill(body="ok")
         if url.endswith("/graphql/query"):
-            return await route.fulfill(json=IG_TIMELINE)
+            following = "variant=following" in (request.headers.get("referer") or "")
+            return await route.fulfill(json=IG_FOLLOWING if following else IG_TIMELINE)
         if "/api/recommend/item_list/" in url:
             return await route.fulfill(json=TT_ITEMS)
+        if "/api/following/item_list/" in url:
+            return await route.fulfill(json=TT_FOLLOWING)
         if "/api/sns/web/v2/user/me" in url:
             return await route.fulfill(json=XHS_ME_GUEST if self.guest else XHS_ME, headers=cors)
         if "/api/sns/web/v1/homefeed" in url:
@@ -53,12 +57,13 @@ class Sites:
             js = 'setTimeout(() => { document.cookie = "sessionid=abc; path=/; domain=.instagram.com; max-age=86400; secure"; }, 300);'
             return await route.fulfill(content_type="text/html", body=PAGE.format(body="sign in", scripts="", js=js))
         if "instagram.com" in url:
-            scripts = f'<script type="application/json">{json.dumps(IG_PAGE)}</script>'
+            first = "" if "variant=following" in url else json.dumps(IG_PAGE)  # For you's first posts come inside
+            scripts = f'<script type="application/json">{first}</script>'
             js = 'addEventListener("scroll", () => { if (!window.asked) { window.asked = true; fetch("/graphql/query", {method: "POST", body: "doc_id=1"}); } });'
             return await route.fulfill(content_type="text/html", body=PAGE.format(body="feed", scripts=scripts, js=js))
         if "tiktok.com" in url:
             body = '<div id="captcha-verify-container">Drag the slider</div>' if self.captcha else "videos"
-            js = 'fetch("/api/recommend/item_list/?count=6");'
+            js = f'fetch("/api/{"following" if "/following" in url else "recommend"}/item_list/?count=6");'
             return await route.fulfill(content_type="text/html", body=PAGE.format(body=body, scripts="", js=js))
         js = ('fetch("https://edith.xiaohongshu.com/api/sns/web/v2/user/me");'
               'fetch("https://edith.xiaohongshu.com/api/sns/web/v1/homefeed");')
@@ -86,6 +91,8 @@ def test_signs_in_once_then_reads_without_a_window(tmp_path):
         payloads = await chromium.read(site)  # a new browser on the same profile still has the sign-in
         posts = foryou.parse("instagram", payloads)
         assert [p.id for p in posts] == ["3401", "3402", "3403"]  # from the page itself and from scrolling
+        following = foryou.parse("instagram", await chromium.read(site, "followed"))
+        assert [p.id for p in following] == ["3501", "3401"]
 
         await chromium.sign_out(site)
         with pytest.raises(foryou.SignInNeeded):
@@ -123,6 +130,8 @@ def test_stops_at_checks_and_sign_in_walls(tmp_path):
         chromium.prepare = signed_in
         payloads = await chromium.read(foryou.SITES["tiktok"])
         assert [p.id for p in foryou.parse("tiktok", payloads)] == ["7430000000000000001", "7430000000000000002"]
+        payloads = await chromium.read(foryou.SITES["tiktok"], "followed")
+        assert [p.id for p in foryou.parse("tiktok", payloads)] == ["7440000000000000001"]
         sites.captcha = True
         with pytest.raises(foryou.SignInNeeded, match="TikTok wants to check it's you"):
             await chromium.read(foryou.SITES["tiktok"])
