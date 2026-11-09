@@ -676,7 +676,7 @@ async function loadStorage() {
 /* ---------- following: accounts read through the free feed service (RSSHub) ---------- */
 const fol = { info: null, platform: stored("follow-platform", "instagram"), kind: "account", adding: null, busy: false, poll: null, fyPoll: null, loadSeq: 0 };
 const KIND_LABELS = { account: "Account", keyword: "Keyword", home: "For you" };
-const isForYou = (f) => f.kind === "foryou";  // your own feeds, read by SocialAll's browser rather than RSSHub
+const isForYou = (f) => f.kind === "foryou" || f.kind === "followed";  // your own feeds, read by SocialAll's browser
 
 async function openFollowing(nav = "push") {
   state.searchAbort?.abort();
@@ -880,12 +880,17 @@ function forYouHtml(fy) {
       status = `<span>Signed in · ${p.read_at ? `read ${ago(p.read_at)}` : "not read yet"} · ${p.posts} post${p.posts === 1 ? "" : "s"}</span>`;
       acts = read + out;
     }
+    // Which of the platform's feeds to read: what it recommends, and posts from the accounts you follow there.
+    const lastOn = p.feeds.filter((f) => f.on).length === 1;
+    const feeds = p.on && !mine ? `<span class="fy-feeds" role="group" aria-label="${esc(p.label)} feeds">${p.feeds.map((f) =>
+      `<button type="button" data-fyfeed="${esc(f.kind)}" data-fyp="${esc(p.name)}" aria-pressed="${f.on}"${f.on && lastOn ? ` disabled title="To stop them all, press Sign out"` : ""}>${f.on ? icon("check") : ""}<span>${esc(f.label)}</span></button>`).join("")}
+      ${p.feeds.length === 1 ? `<small>${esc(p.label)}'s website has no Following feed. Add accounts by link above.</small>` : ""}</span>` : "";
     return `<li data-p="${esc(p.name)}"><span class="dot"></span><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.label)}</a>
-      <span class="fy-status">${status}</span><span class="fy-acts">${acts}</span></li>`;
+      <span class="fy-status">${status}${feeds}</span><span class="fy-acts">${acts}</span></li>`;
   }).join("");
   return `<div class="follow-card fy">
-      <div><h2>Your own For you feeds</h2>
-        <p class="lead">What Instagram, TikTok and Xiaohongshu recommend to you, in this stream. Sign in once in a window SocialAll opens on this Mac. ${every}.</p></div>
+      <div><h2>Your own feeds</h2>
+        <p class="lead">Sign in once in a window SocialAll opens on this Mac, and what you'd see there joins this stream: your For you feed and, on Instagram and TikTok, new posts from everyone you follow. ${every}.</p></div>
       <ul class="fy-list">${rows}</ul>
       <details class="fy-how"${on ? "" : " open"}><summary>How this stays safe</summary>
         <p class="note">${icon("lock")}<span>You sign in on the platform's own page, so SocialAll never sees your password. The sign-in stays in SocialAll's own browser on this Mac, apart from your usual one. SocialAll only looks: it never likes, follows, comments or posts. Platforms don't allow automated reading, so now and then one may sign you out or ask you to prove you're a person, and the feed waits for you here.${fy.ready ? "" : " The first sign-in downloads a browser for SocialAll, about 150 MB."}</span></p>
@@ -893,9 +898,18 @@ function forYouHtml(fy) {
     </div>`;
 }
 
+async function forYouFeed(platform, kind, on) {
+  try {
+    fol.info.foryou = await api(`/api/following/foryou/${platform}/feeds/${kind}`, { method: "PUT", body: JSON.stringify({ on }) });
+  } catch (e) { return toast(e.message); }
+  if (fol.info.foryou.busy) startForYouPoll();
+  await loadFollowing();
+  if (!on) await loadFollowPosts();
+}
+
 async function forYouAct(what, platform) {
   const label = PLATFORMS[platform] || platform;
-  if (what === "sign-out" && !confirm(`Sign out of ${label} in SocialAll? Its For you posts are removed from this stream.`)) return;
+  if (what === "sign-out" && !confirm(`Sign out of ${label} in SocialAll? Its posts are removed from this stream.`)) return;
   const call = {
     "sign-in": [`/api/following/foryou/${platform}/sign-in`, "POST"],
     read: [`/api/following/foryou/${platform}/read`, "POST"],
@@ -1042,6 +1056,8 @@ $("follow").addEventListener("click", (e) => {
   if (un) return unfollow(+un.dataset.unfollow);
   const fy = e.target.closest("[data-fy]");
   if (fy) return forYouAct(fy.dataset.fy, fy.dataset.fyp);
+  const feed = e.target.closest("[data-fyfeed]");
+  if (feed) return forYouFeed(feed.dataset.fyp, feed.dataset.fyfeed, feed.getAttribute("aria-pressed") !== "true");
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "start") startService();
   else if (act === "save-token") saveXToken();

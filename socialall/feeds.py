@@ -61,6 +61,10 @@ FOR_YOU_URLS = {
     "tiktok": "https://www.tiktok.com/foryou",
     "xiaohongshu": "https://www.xiaohongshu.com/explore",
 }
+FOLLOWED_URLS = {  # Xiaohongshu's website has no such page
+    "instagram": "https://www.instagram.com/?variant=following",
+    "tiktok": "https://www.tiktok.com/following",
+}
 KIND_HINTS = {
     "keyword": ("A word, phrase or #hashtag", "Every new post on X that mentions it. Uses the spare account's token."),
     "home": ("", "The spare account's own For you feed. Follow accounts you like from that account and it learns what to show."),
@@ -193,6 +197,8 @@ def route(platform: str, handle: str, kind: str = "account") -> str:
 def profile_url(platform: str, handle: str, kind: str = "account") -> str:
     if kind == "foryou":
         return FOR_YOU_URLS[platform]
+    if kind == "followed":
+        return FOLLOWED_URLS[platform]
     if kind == "keyword":
         return f"https://x.com/search?q={quote(handle, safe='')}&f=live"
     if kind == "home":
@@ -213,6 +219,8 @@ def display(platform: str, handle: str, name: str | None = None, kind: str = "ac
         return "For you (spare account)"
     if kind == "foryou":
         return f"Your {LABELS[platform]} For you"
+    if kind == "followed":
+        return f"Accounts you follow on {LABELS[platform]}"
     if platform in ("x", "instagram", "tiktok"):
         return f"@{handle}"
     return name or (handle if platform == "linkedin" else "Xiaohongshu account")

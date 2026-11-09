@@ -18,9 +18,10 @@ UI, through a JSON API, or from the command line.
   posts land in one stream you can filter and search. It reads them through
   [RSSHub](https://docs.rsshub.app), which runs on your Mac. See
   [Following accounts](#following-accounts-free-no-limit).
-- **Your own For you feeds.** Sign in to Instagram, TikTok and Xiaohongshu once,
-  in a window SocialAll opens, and what they recommend to you joins the same
-  stream. See [Your own For you feeds](#your-own-for-you-feeds).
+- **Your own feeds.** Sign in to Instagram, TikTok and Xiaohongshu once, in a
+  window SocialAll opens, and what they recommend to you joins the same stream,
+  along with new posts from everyone you follow on Instagram and TikTok. See
+  [Your own feeds](#your-own-feeds).
 - **Star posts** to keep them in Favourites. Videos of starred posts are
   downloaded to a local folder (`cache/videos/` by default) and play from there,
   so they still work offline or after the platform removes them. Find a
@@ -73,8 +74,9 @@ API docs are at `http://127.0.0.1:8000/docs` once the server is running.
 | `GET /api/following/posts?q=...&platform=x` | Posts from followed accounts, newest first |
 | `POST /api/following/refresh` | Read every followed account now |
 | `POST /api/following/service/start` | Start RSSHub in Docker |
-| `GET /api/following/foryou` | Your own For you feeds: signed in or not, last read, what's happening now |
+| `GET /api/following/foryou` | Your own feeds (For you and Following): signed in or not, last read, what's happening now |
 | `POST /api/following/foryou/{platform}/sign-in`, `/read`, `POST /api/following/foryou/close`, `DELETE /api/following/foryou/{platform}` | Open the sign-in window, read now, close the window, sign out (`instagram`, `tiktok`, `xiaohongshu`) |
+| `PUT /api/following/foryou/{platform}/feeds/{foryou\|followed}` | Turn a signed-in platform's For you or Following feed on or off (`{"on": true}`) |
 
 ## Mac app
 
@@ -152,17 +154,22 @@ their images on other pages.
 The platforms don't allow reading their pages this way, and they may block you
 if you follow hundreds of accounts. Nothing here uses your own accounts.
 
-## Your own For you feeds
+## Your own feeds
 
 Following shows accounts you chose. To also see what Instagram, TikTok and
-Xiaohongshu recommend to **you**, sign in to them inside SocialAll:
+Xiaohongshu show **you**, sign in to them inside SocialAll. Each one gives you its
+**For you** feed (what it recommends), and Instagram and TikTok also give you
+their **Following** feed: new posts from everyone you already follow there, so
+you don't have to add them one by one. Xiaohongshu's website has no Following
+page or list of who you follow, so for Xiaohongshu add accounts by link instead.
 
-1. Open **Following**. Under **Your own For you feeds**, press **Sign in** next to
+1. Open **Following**. Under **Your own feeds**, press **Sign in** next to
    a platform. The first time, SocialAll downloads its own browser (Playwright's
    Chromium, about 150 MB). No Docker needed.
 2. A Chromium window opens on the platform's sign-in page. Sign in as usual,
    including any code the platform texts you. The window closes by itself once
-   you're in, and SocialAll reads the feed straight away.
+   you're in, and SocialAll reads its feeds straight away. Turn either feed off
+   with its switch.
 3. After that it reads each feed about every 2 hours while SocialAll is open
    (`SOCIALALL_FORYOU_HOURS`, 0 means only when you press **Read now**). Refresh
    also reads any feed older than half an hour.
@@ -174,8 +181,8 @@ How it works and what it never does:
   folder (`~/Library/Application Support/SocialAll/browser` on a Mac), apart from
   your everyday browser. **Sign out** deletes that platform's cookies from it and
   removes its posts.
-- To read, SocialAll opens that profile without a window, loads the For you page,
-  scrolls four or so times with pauses like a person's, and keeps the posts the
+- To read, SocialAll opens that profile without a window, loads the For you or
+  Following page, scrolls four or so times with pauses like a person's, and keeps the posts the
   page itself received. It never likes, follows, comments or posts, skips ads,
   and waits at least 10 minutes between two reads of the same feed.
 - If a platform signs you out or asks you to prove you're a person, that feed

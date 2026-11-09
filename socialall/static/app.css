@@ -522,6 +522,14 @@ h1, h2, p { margin: 0; }
 .fy-bad .icon { color: var(--danger); }
 .fy-step .icon { color: var(--accent); animation: spin 900ms linear infinite; }
 .fy-acts { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.fy-status { display: grid; gap: 6px; justify-items: start; }
+.fy-status > .fy-feeds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fy-feeds button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 12.5px; cursor: pointer; }
+.fy-feeds button:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+.fy-feeds button[aria-pressed="true"] { border-color: oklch(0.56 0.15 42 / 0.45); background: var(--accent-soft); color: var(--text); }
+.fy-feeds button:disabled { cursor: default; }
+.fy-feeds .icon { width: 13px; height: 13px; margin: 0; color: var(--accent); }
+.fy-feeds small { font-size: 12px; color: var(--text-3); }
 .fy-acts .linkish { font-size: 13px; }
 .fy-how summary { cursor: pointer; font-size: 13px; color: var(--text-2); width: fit-content; }
 .fy-how summary:hover { color: var(--text); }

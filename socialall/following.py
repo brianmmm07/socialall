@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 ADD_TIMEOUT = feeds.FETCH_TIMEOUT + 10
 
 
+class FeedSwitch(BaseModel):
+    on: bool
+
+
 class FollowIn(BaseModel):
     platform: str
     handle: str = ""
@@ -72,8 +76,8 @@ class Refresher:
 
     async def refresh(self) -> dict:
         async with self._lock:
-            # Your own For you feeds are read by SocialAll's browser, on their own schedule.
-            follows = [f for f in self.store().list_follows() if f.get("kind") != foryou.KIND]
+            # Your own feeds (For you and Following) are read by SocialAll's browser, on their own schedule.
+            follows = [f for f in self.store().list_follows() if f.get("kind") not in foryou.KINDS]
             if not follows:
                 return {"new": 0, "new_keys": [], "errors": {}, "offline": False}
             if not await feeds.healthy(self.client()):
@@ -215,6 +219,18 @@ def following_router(store: Callable[[], Store], client: Callable[[], httpx.Asyn
     async def foryou_close(request: Request):
         same_origin(request)
         mine.close_window()
+        await asyncio.sleep(0.05)
+        return await mine.status()
+
+    @router.put("/foryou/{platform}/feeds/{kind}")
+    async def foryou_feed(platform: str, kind: str, body: FeedSwitch, request: Request):
+        same_origin(request)
+        try:
+            mine.set_feed(platform_of(platform), kind, body.on)
+        except LookupError as e:
+            raise HTTPException(404, str(e)) from None
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
         await asyncio.sleep(0.05)
         return await mine.status()
 
