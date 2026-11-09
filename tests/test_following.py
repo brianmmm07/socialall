@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -249,6 +250,17 @@ def test_start_button_runs_rsshub_in_docker(monkeypatch):
     assert "127.0.0.1:1200:1200" in run_args and run_args[-1] == feeds.IMAGE
     assert "TWITTER_AUTH_TOKEN" in run_args and "tok" not in run_args and env["TWITTER_AUTH_TOKEN"] == "tok"
     assert [a[0] for a, _ in calls] == ["info", "pull", "rm", "run"]
+    # Opened from the Dock, the app's PATH is short, but docker needs its helpers (docker-credential-desktop).
+    helpers = "/Applications/Docker.app/Contents/Resources/bin"
+    assert all(e and helpers in e["PATH"].split(os.pathsep) for _, e in calls)
+
+
+def test_docker_finds_its_helpers_with_a_short_path(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(feeds, "docker", lambda: "/usr/local/bin/docker")
+    path = feeds.docker_env(X="1")["PATH"].split(os.pathsep)
+    assert path[0] == "/usr/local/bin" and "/Applications/Docker.app/Contents/Resources/bin" in path
+    assert path[-2:] == ["/usr/bin", "/bin"] and len(path) == len(set(path))
 
 
 def test_image_proxy_only_fetches_known_image_hosts(app_client, monkeypatch):
